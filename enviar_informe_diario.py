@@ -8,11 +8,16 @@ import base64
 import html as html_module
 from email.utils import parsedate_to_datetime
 import unicodedata
+from difflib import SequenceMatcher
 from urllib.parse import urlparse, urlunparse
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from deep_translator import GoogleTranslator
 
+# ==========================================
+# CONFIGURACIÓN
+# ==========================================
 SESION_HTTP = requests.Session()
 SESION_HTTP.headers.update({
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
@@ -25,6 +30,9 @@ EMAIL_DESTINO = os.environ.get("EMAIL_DESTINO")
 
 CACHE_TITULARES = {}
 
+# ==========================================
+# LIMPIEZA Y NORMALIZACIÓN
+# ==========================================
 def limpiar_html_texto(texto):
     if not texto:
         return ""
@@ -58,6 +66,41 @@ def es_reciente_48h(fecha_dt):
     diferencia = ahora - fecha_dt.astimezone(timezone.utc)
     return timedelta(hours=-24) <= diferencia <= timedelta(hours=48)
 
+# ==========================================
+# DEDUPLICACIÓN DE DISTINTOS MEDIOS
+# ==========================================
+def obtener_palabras_clave_titular(texto):
+    t_norm = normalizar_texto(limpiar_firma_medio(texto))
+    palabras = re.findall(r'\b[a-z0-9]{4,}\b', t_norm)
+    stop_words = {
+        "para", "como", "sobre", "entre", "este", "esta", "estos", "estas",
+        "desde", "hacia", "contra", "rusia", "ruso", "rusa", "rusos", "ucrania",
+        "informe", "noticias", "noticia", "ultimo", "minuto", "segun", "afirma"
+    }
+    return set(p for p in palabras if p not in stop_words)
+
+def son_mismo_evento(tit1, tit2):
+    t1 = normalizar_texto(limpiar_firma_medio(re.sub(r'\[.*?\]', '', tit1)))
+    t2 = normalizar_texto(limpiar_firma_medio(re.sub(r'\[.*?\]', '', tit2)))
+    if len(t1) < 15 or len(t2) < 15:
+        return False
+
+    ratio_texto = SequenceMatcher(None, t1[:100], t2[:100]).ratio()
+    if ratio_texto > 0.65:
+        return True
+
+    kw1 = obtener_palabras_clave_titular(tit1)
+    kw2 = obtener_palabras_clave_titular(tit2)
+    if kw1 and kw2:
+        interseccion = kw1.intersection(kw2)
+        if len(interseccion) >= 4:
+            return True
+
+    return False
+
+# ==========================================
+# ENLACES Y TRADUCCIÓN
+# ==========================================
 def decodificar_url_google_news_offline(url_rss):
     if not url_rss or "news.google.com" not in url_rss:
         return url_rss
@@ -79,8 +122,10 @@ def traducir_titular(titular_orig):
     if not titular_orig:
         return ""
     t_clean = limpiar_html_texto(titular_orig)
-    if len(t_clean) < 4 or t_clean in CACHE_TITULARES:
-        return CACHE_TITULARES.get(t_clean, t_clean)
+    if len(t_clean) < 4:
+        return t_clean
+    if t_clean in CACHE_TITULARES:
+        return CACHE_TITULARES[t_clean]
 
     medio_suffix = ""
     texto_a_traducir = t_clean
@@ -90,23 +135,13 @@ def traducir_titular(titular_orig):
         texto_a_traducir = t_clean[:m_medio.start()].strip()
 
     try:
-        url = "https://translate.googleapis.com/translate_a/single"
-        params = {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:350]}
-        r = SESION_HTTP.get(url, params=params, timeout=2.5)
-        if r.status_code == 200:
-            data = r.json()
-            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
-                partes = [seg[0] for seg in data[0] if isinstance(seg, list) and len(seg) > 0 and seg[0]]
-                trad = limpiar_html_texto("".join(partes))
-                if len(trad) > 3:
-                    resultado = f"{trad}{medio_suffix}" if medio_suffix else trad
-                    CACHE_TITULARES[t_clean] = resultado
-                    return resultado
+        traducido = GoogleTranslator(source='auto', target='es').translate(texto_a_traducir[:450])
+        resultado = f"{traducido}{medio_suffix}" if medio_suffix else traducido
+        CACHE_TITULARES[t_clean] = resultado
+        return resultado
     except Exception:
-        pass
-
-    CACHE_TITULARES[t_clean] = t_clean
-    return t_clean
+        CACHE_TITULARES[t_clean] = t_clean
+        return t_clean
 
 def extraer_resumen_rss(tit_orig, desc_rss):
     if not desc_rss:
@@ -121,6 +156,9 @@ def extraer_resumen_rss(tit_orig, desc_rss):
     limpio = limpiar_html_texto(desc_rss)
     return limpio[:1800] if len(limpio) > 25 else limpiar_firma_medio(tit_orig)
 
+# ==========================================
+# PALABRAS CLAVE Y CLASIFICACIÓN
+# ==========================================
 EMPRESAS_ESTRATEGICAS_ESP = [
     "indra", "grupo oesia", "oesia", "uav navigation", "tecnobit", "navantia",
     "escribano", "em&e", "sener", "arquimea", "destinus", "santa barbara", "gdels",
@@ -178,6 +216,9 @@ def evaluacion_contexto(cat):
     }
     return m.get(cat, "Operaciones híbridas globales del Kremlin: ciberataques, sabotajes, flota fantasma o desinformación.")
 
+# ==========================================
+# RECOLECCIÓN
+# ==========================================
 def obtener_prensa():
     fuentes = [
         ("https://news.google.com/rss/search?q=(Rusia+OR+ruso+OR+Kremlin)+(España+OR+Madrid+OR+CNI)+(sabotaje+OR+ciberataque+OR+espionaje)&hl=es&gl=ES&ceid=ES:es", "España Seguridad (ES)"),
@@ -257,6 +298,9 @@ def obtener_telegram():
             pass
     return items
 
+# ==========================================
+# FORMATO Y ENVÍO DEL CORREO
+# ==========================================
 def generar_html_email(alertas):
     fecha_str = datetime.now().strftime("%d/%m/%Y %H:%M")
     secciones = [
@@ -310,7 +354,7 @@ def generar_html_email(alertas):
 
 def enviar_correo(html_content, total_alertas):
     msg = MIMEMultipart("alternative")
-    msg["Subject"] = f"🛡️ Informe OSINT (48h): {total_alertas} Alertas - {datetime.now().strftime('%d/%m/%Y')}"
+    msg["Subject"] = f"🛡️ Informe OSINT (48h): {total_alertas} Alertas - {datetime.now().strftime('%d/%m/%Y %H:%M')}"
     msg["From"] = EMAIL_EMISOR
     msg["To"] = EMAIL_DESTINO
     msg.attach(MIMEText(html_content, "html", "utf-8"))
@@ -323,19 +367,21 @@ def main():
     brutos = obtener_prensa() + obtener_telegram()
     brutos.sort(key=lambda x: x["fecha_dt"], reverse=True)
 
-    unicos = []
-    vistos = set()
+    # 1. Filtro por enlace exacto
+    unicos_por_url = []
+    vistos_url = set()
     for b in brutos:
         u = limpiar_url(b["enlace"])
-        if u not in vistos:
-            vistos.add(u)
-            unicos.append(b)
+        if u not in vistos_url:
+            vistos_url.add(u)
+            unicos_por_url.append(b)
 
-    alertas = []
-    for it in unicos:
+    # 2. Traducción y clasificación
+    alertas_procesadas = []
+    for it in unicos_por_url:
         tit_es = traducir_titular(it["titular_raw"])
         cat = it.get("cat_fija") or clasificar(tit_es, it["cuerpo"])
-        alertas.append({
+        alertas_procesadas.append({
             "canal": it["canal"],
             "fecha_dt": it["fecha_dt"],
             "titular": tit_es,
@@ -345,12 +391,18 @@ def main():
             "enlace": it["enlace"]
         })
 
-    if alertas and EMAIL_EMISOR and PASSWORD_EMISOR and EMAIL_DESTINO:
-        html = generar_html_email(alertas)
-        enviar_correo(html, len(alertas))
-        print(f"Correo enviado correctamente con {len(alertas)} alertas.")
+    # 3. Deduplicación semántica entre distintos periódicos
+    alertas_finales = []
+    for alerta in alertas_procesadas:
+        if not any(son_mismo_evento(alerta["titular"], previa["titular"]) for previa in alertas_finales):
+            alertas_finales.append(alerta)
+
+    if alertas_finales and EMAIL_EMISOR and PASSWORD_EMISOR and EMAIL_DESTINO:
+        html = generar_html_email(alertas_finales)
+        enviar_correo(html, len(alertas_finales))
+        print(f"Correo enviado correctamente con {len(alertas_finales)} alertas consolidadas.")
     else:
-        print("No hay alertas recientes o faltan variables de entorno.")
+        print("No hay alertas recientes o faltan credenciales de entorno.")
 
 if __name__ == "__main__":
     main()
