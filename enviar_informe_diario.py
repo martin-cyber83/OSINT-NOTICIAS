@@ -45,8 +45,8 @@ def limpiar_firma_medio(texto):
 
 def limpiar_url(url):
     try:
-        p = urlparse(url)
-        return urlunparse((p.scheme, p.netloc, p.path, '', '', ''))
+        parsed = urlparse(url)
+        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', '', ''))
     except Exception:
         return url
 
@@ -147,14 +147,14 @@ def tiene_amenaza(texto):
     lat = ["hibrid", "hybrid", "sabotaj", "sabotage", "espia", "espionaje", "spy", "espionage", "ciber", "cyber", "hack", "ddos", "malware", "ransomware", "apt28", "apt29", "sandworm", "noname057", "killnet", "desinformacion", "disinformation", "propaganda", "cripto", "crypto", "bitcoin", "btc", "usdt", "tether", "garantex", "sancion", "sanction", "flota fantasma", "shadow fleet", "cable submarino", "crimen de guerra", "war crime", "icc", "detenido", "arrestado", "arrested", "detained", "dron", "uav", "jamming"]
     return any(c in t_raw for c in cir) or any(v in t_norm for v in lat)
 
-def clasificar(tit):
-    t_all = normalizar_texto(tit)
+def clasificar(tit, canal=""):
+    t_all = normalizar_texto(f"{tit} {canal}")
+    if "finint cripto" in normalizar_texto(canal) or re.search(r'\b(cripto|crypto|usdt|bitcoin|btc|tether|garantex|monero|blockchain)\b', t_all):
+        return "CRIPTO"
     if re.search(r'\b(crimen de guerra|war crime|corte penal internacional|genocidio|tortura)\b', t_all):
         return "CRIMENES"
     if re.search(r'\b(detenido|arrestado|arrested|detained)\b', t_all) and re.search(r'\b(espia|spy|espionaje|sabotaje|gru|fsb)\b', t_all):
         return "DETENCION"
-    if re.search(r'\b(cripto|crypto|usdt|bitcoin|btc|tether|garantex|sancion|sanction)\b', t_all):
-        return "CRIPTO"
     if any(re.search(r'\b' + re.escape(emp) + r'\b', t_all) for emp in EMPRESAS_ESTRATEGICAS_ESP):
         return "EMPRESA"
     if re.search(r'\b(espana|spain|madrid|cni|incibe|guardia civil|policia nacional)\b', t_all):
@@ -273,11 +273,11 @@ def procesar_feed(datos):
 
 def raspar_prensa():
     fuentes = [
+        ("https://news.google.com/rss/search?q=(crypto+OR+bitcoin+OR+USDT)+(Russia+OR+sanctions+OR+Garantex)&hl=en-US&gl=US&ceid=US:en", "FININT Cripto (EN)"),
         ("https://news.google.com/rss/search?q=(Rusia+OR+ruso+OR+Kremlin)+(España+OR+Madrid+OR+CNI)+(sabotaje+OR+ciberataque+OR+espionaje)&hl=es&gl=ES&ceid=ES:es", "España Seguridad (ES)"),
         ("https://news.google.com/rss/search?q=(Indra+OR+Navantia+OR+Telefónica)+(Rusia+OR+ciberataque+OR+sabotaje)&hl=es&gl=ES&ceid=ES:es", "Empresas España (ES)"),
         ("https://news.google.com/rss/search?q=(Russia+OR+Ukraine)+(sabotage+OR+cyberattack+OR+espionage+OR+\"hybrid+warfare\")&hl=en-US&gl=US&ceid=US:en", "Intel Global (EN)"),
         ("https://news.google.com/rss/search?q=(Russland+OR+Ukraine)+(Sabotage+OR+Spionage+OR+Cyberangriff)&hl=de&gl=DE&ceid=DE:de", "Intel Europa Central (DE)"),
-        ("https://news.google.com/rss/search?q=(crypto+OR+bitcoin+OR+USDT)+(Russia+OR+sanctions+OR+Garantex)&hl=en-US&gl=US&ceid=US:en", "FININT Cripto (EN)"),
         ("https://news.google.com/rss/search?q=(arrested+OR+detained)+(Russian+spy+OR+Russian+sabotage+OR+GRU)&hl=en-US&gl=US&ceid=US:en", "Detenciones (EN)"),
         ("https://news.google.com/rss/search?q=(Russia+OR+Ukraine)+(\"war+crimes\"+OR+ICC)&hl=en-US&gl=US&ceid=US:en", "War Crimes (EN)")
     ]
@@ -339,7 +339,7 @@ def generar_html_email(alertas):
                     <strong>🧠 Evaluación:</strong> {ana}
                 </div>
                 <div>
-                    <a href="{enlace}" target="_blank" style="color:#0284c7; font-size:11px; font-weight:700;">🔗 Noticia / Despacho original en {canal} &rarr;</a>
+                    <a href="{enlace}" target="_blank" style="color:#0284c7; font-size:11px; font-weight:700;">🔗 Noticia original en {canal} &rarr;</a>
                 </div>
             </div>
             """
@@ -361,7 +361,7 @@ def main():
     brutos = raspar_prensa() + raspar_telegram()
     brutos.sort(key=lambda x: x["fecha_dt"], reverse=True)
 
-    # 1. Filtro estricto por enlace y titular crudo
+    # 1. Deduplicación inicial por enlace y similitud textual
     pre_unicos = []
     urls_vistas = set()
     for b in brutos:
@@ -381,7 +381,7 @@ def main():
     with ThreadPoolExecutor(max_workers=8) as ex:
         titulares_traducidos = list(ex.map(lambda it: traducir_solo_titular(it["titular_raw"]), pre_unicos))
 
-    # 3. Deduplicación secundaria tras traducir
+    # 3. Clasificación precisa y segunda deduplicación
     alertas_finales = []
     for item, tit_es in zip(pre_unicos, titulares_traducidos):
         if item["es_tg"]:
@@ -390,7 +390,7 @@ def main():
             cat_final = "TELEGRAM"
         else:
             titular_final = tit_es
-            cat_final = clasificar(titular_final)
+            cat_final = clasificar(titular_final, canal=item["canal"])
 
         nueva_alerta = {
             "canal": item["canal"],
