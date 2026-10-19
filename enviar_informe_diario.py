@@ -29,6 +29,7 @@ PASSWORD_EMISOR = os.environ.get("PASSWORD_EMISOR")
 EMAIL_DESTINO = os.environ.get("EMAIL_DESTINO")
 
 CACHE_TITULARES = {}
+CACHE_CUERPOS = {}
 
 # ==========================================
 # LIMPIEZA Y NORMALIZACIÓN
@@ -67,7 +68,7 @@ def es_reciente_48h(fecha_dt):
     return timedelta(hours=-24) <= diferencia <= timedelta(hours=48)
 
 # ==========================================
-# DEDUPLICACIÓN DE DISTINTOS MEDIOS
+# DEDUPLICACIÓN DE NOTICIAS DE DISTINTOS MEDIOS
 # ==========================================
 def obtener_palabras_clave_titular(texto):
     t_norm = normalizar_texto(limpiar_firma_medio(texto))
@@ -99,7 +100,7 @@ def son_mismo_evento(tit1, tit2):
     return False
 
 # ==========================================
-# ENLACES Y TRADUCCIÓN
+# TRADUCCIÓN (TITULARES Y TEXTOS DE TELEGRAM)
 # ==========================================
 def decodificar_url_google_news_offline(url_rss):
     if not url_rss or "news.google.com" not in url_rss:
@@ -141,6 +142,44 @@ def traducir_titular(titular_orig):
         return resultado
     except Exception:
         CACHE_TITULARES[t_clean] = t_clean
+        return t_clean
+
+def traducir_texto_largo(texto):
+    if not texto:
+        return ""
+    t_clean = limpiar_html_texto(texto)
+    if len(t_clean) < 10:
+        return t_clean
+    if t_clean in CACHE_CUERPOS:
+        return CACHE_CUERPOS[t_clean]
+
+    try:
+        # Se divide en bloques de 400 caracteres respetando oraciones para una traducción fluida
+        partes = [p.strip() for p in re.split(r'(?<=[.!?\n])\s+', t_clean) if p.strip()]
+        bloques = []
+        bloque_actual = ""
+
+        for p in partes:
+            if len(bloque_actual) + len(p) < 420:
+                bloque_actual += (" " + p if bloque_actual else p)
+            else:
+                if bloque_actual:
+                    bloques.append(bloque_actual)
+                bloque_actual = p
+        if bloque_actual:
+            bloques.append(bloque_actual)
+
+        traductor = GoogleTranslator(source='auto', target='es')
+        traducidos = []
+        for b in bloques:
+            trad = traductor.translate(b)
+            traducidos.append(trad if trad else b)
+
+        resultado = " ".join(traducidos)
+        CACHE_CUERPOS[t_clean] = resultado
+        return resultado
+    except Exception:
+        CACHE_CUERPOS[t_clean] = t_clean
         return t_clean
 
 def extraer_resumen_rss(tit_orig, desc_rss):
@@ -256,7 +295,8 @@ def obtener_prensa():
                             "fecha_dt": dt,
                             "titular_raw": tit,
                             "cuerpo": cuerpo,
-                            "enlace": decodificar_url_google_news_offline(link)
+                            "enlace": decodificar_url_google_news_offline(link),
+                            "es_telegram": False
                         })
         except Exception:
             pass
@@ -292,7 +332,8 @@ def obtener_telegram():
                         "titular_raw": f"[{c.upper()}] {txt[:120]}...",
                         "cuerpo": txt[:1800],
                         "enlace": link,
-                        "cat_fija": "TELEGRAM"
+                        "cat_fija": "TELEGRAM",
+                        "es_telegram": True
                     })
         except Exception:
             pass
@@ -331,7 +372,7 @@ def generar_html_email(alertas):
         </div>
         """
         for a in sub:
-            cuerpo_telegram = f'<div style="font-size:11.5px; color:#334155; background:#f8fafc; padding:6px 8px; border-radius:3px; margin-bottom:6px;">{html_module.escape(a["cuerpo"])}</div>' if a["categoria"] == "TELEGRAM" else ""
+            cuerpo_telegram = f'<div style="font-size:11.5px; color:#334155; background:#f8fafc; padding:6px 8px; border-radius:3px; margin-bottom:6px; line-height:1.45;"><strong>📄 Mensaje (Traducido):</strong><br>{html_module.escape(a["cuerpo"])}</div>' if a["categoria"] == "TELEGRAM" else ""
             html += f"""
             <div style="border:1px solid #e2e8f0; border-left:4px solid {color}; padding:8px 12px; margin-bottom:8px; border-radius:3px; background:#ffffff;">
                 <div style="font-size:10.5px; color:#64748b; font-weight:700; margin-bottom:4px;">
@@ -380,12 +421,19 @@ def main():
     alertas_procesadas = []
     for it in unicos_por_url:
         tit_es = traducir_titular(it["titular_raw"])
-        cat = it.get("cat_fija") or clasificar(tit_es, it["cuerpo"])
+        
+        # Si proviene de Telegram, traducimos también el cuerpo del mensaje
+        if it.get("es_telegram"):
+            cuerpo_es = traducir_texto_largo(it["cuerpo"])
+        else:
+            cuerpo_es = it["cuerpo"]
+
+        cat = it.get("cat_fija") or clasificar(tit_es, cuerpo_es)
         alertas_procesadas.append({
             "canal": it["canal"],
             "fecha_dt": it["fecha_dt"],
             "titular": tit_es,
-            "cuerpo": it["cuerpo"],
+            "cuerpo": cuerpo_es,
             "categoria": cat,
             "evaluacion": evaluacion_contexto(cat),
             "enlace": it["enlace"]
