@@ -2,9 +2,11 @@ name: Envio Diario OSINT
 
 on:
   schedule:
-    # 06:00 UTC = 07:00 / 08:00 (hora peninsular de España)
-    - cron: '0 6 * * *'
-  workflow_dispatch: # Permite probar el envío manualmente con un botón
+    # 06:00 UTC y 18:00 UTC (8:00 AM y 8:00 PM en horario de verano / UTC+2)
+    - cron: '0 6,18 * * *'
+    # 07:00 UTC y 19:00 UTC (8:00 AM y 8:00 PM en horario de invierno / UTC+1)
+    - cron: '0 7,19 * * *'
+  workflow_dispatch:
 
 jobs:
   ejecutar-bot:
