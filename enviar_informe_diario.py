@@ -66,6 +66,9 @@ def es_reciente_48h(fecha_dt):
     diferencia = ahora - fecha_dt.astimezone(timezone.utc)
     return timedelta(hours=-24) <= diferencia <= timedelta(hours=48)
 
+def contiene_cirilico(texto):
+    return bool(re.search(r'[\u0400-\u04FF]', str(texto)))
+
 # ==========================================
 # DESCODIFICACIÓN OFFLINE DE GOOGLE NEWS
 # ==========================================
@@ -108,7 +111,7 @@ def traducir_solo_titular(titular_orig):
 
     # Intento 1: API MyMemory
     try:
-        url_my = f"https://api.mymemory.translated.net/get?q={quote(texto_a_traducir[:450])}&langpair=autodetect|es"
+        url_my = f"https://api.mymemory.translated.net/get?q={quote(texto_a_traducir[:350])}&langpair=autodetect|es"
         r = SESION_HTTP.get(url_my, timeout=3.5)
         if r.status_code == 200:
             datos = r.json()
@@ -124,7 +127,7 @@ def traducir_solo_titular(titular_orig):
     # Intento 2: Google endpoint directo
     try:
         url = "https://translate.googleapis.com/translate_a/single"
-        params = {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:450]}
+        params = {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:350]}
         r = SESION_HTTP.get(url, params=params, timeout=2.5)
         if r.status_code == 200:
             data = r.json()
@@ -253,21 +256,21 @@ def es_espana(titular, cuerpo):
 
 def generar_analisis_contexto(categoria):
     if categoria == "CRIMENES":
-        return "Documentación de crímenes de guerra, ataques a población o infraestructuras civiles e investigaciones judiciales internacionales en el contexto de la agresión rusa."
+        return "Documentación de crímenes de guerra, ataques a infraestructuras civiles e investigaciones judiciales internacionales."
     if categoria == "EMPRESA":
-        return "Seguimiento sobre empresas estratégicas de España (Defensa, Aeroespacial, Energía y Telecomunicaciones) ante ciberataques, sabotajes o señalamiento hostil ruso."
+        return "Seguimiento sobre empresas estratégicas de España (Defensa, Aeroespacial, Energía y Telecomunicaciones)."
     if categoria == "ESPANA":
-        return "Impacto directo en la seguridad nacional, ciberespacio o infraestructuras críticas de España frente a operaciones híbridas y de desestabilización vinculadas al Kremlin."
+        return "Impacto directo en la seguridad nacional e infraestructuras críticas de España frente a operaciones hostiles."
     if categoria == "CRIPTO":
-        return "Inteligencia financiera (FININT): evasión de sanciones internacionales y empleo de criptoactivos (USDT, BTC) para financiación encubierta o plataformas sin regulación."
+        return "Inteligencia financiera (FININT): evasión de sanciones internacionales y uso de criptoactivos no regulados."
     if categoria == "DETENCION":
-        return "Operaciones de contrainteligencia y policiales frente a redes de espionaje del GRU/FSB/SVR, células de sabotaje o agentes encubiertos."
+        return "Operaciones de contrainteligencia y policiales frente a redes de espionaje o sabotaje."
     if categoria == "TELEGRAM":
-        return "Reporte capturado de canales tácticos primarios de Telegram: inteligencia operativa y sobre el terreno de la zona de conflicto."
-    return "Actividad vinculada a operaciones híbridas globales del Kremlin: ciberataques, guerra electrónica, sabotaje, flota fantasma o desinformación."
+        return "Reporte táctico de canales primarios de Telegram: inteligencia operativa de la zona de conflicto."
+    return "Actividad vinculada a operaciones híbridas globales del Kremlin: ciberataques, sabotajes o desinformación."
 
 # ==========================================
-# RASTREADORES EXTERNOS
+# RASTREADORES
 # ==========================================
 def raspar_rumafia():
     items = []
@@ -292,7 +295,6 @@ def raspar_rumafia():
                 texto_eval = f"{tit} {desc}"
                 if len(tit) > 10 and tiene_vector_amenaza_estricto(texto_eval):
                     items.append({
-                        "id": f"RUMAFIA-{hash(link)}",
                         "plataforma": "INVESTIGACIÓN",
                         "canal": "RuMafia.net",
                         "fecha_dt": dt,
@@ -327,7 +329,6 @@ def raspar_antikor():
                 texto_eval = f"{tit} {desc}"
                 if len(tit) > 10 and (tiene_vinculo_ruso_estricto(texto_eval) and tiene_vector_amenaza_estricto(texto_eval)):
                     items.append({
-                        "id": f"ANTIKOR-{hash(link)}",
                         "plataforma": "INVESTIGACIÓN",
                         "canal": "Antikor Portal",
                         "fecha_dt": dt,
@@ -376,16 +377,16 @@ def raspar_un_canal_tg(canal):
             a_link = p.find("a", class_="tgme_widget_message_date")
             link = a_link["href"] if a_link and a_link.get("href") else f"https://t.me/s/{canal}"
 
-            # Extrae el texto legible completo sin cortar con puntos suspensivos
-            texto_despacho = texto_sin_urls[:420].strip()
+            # Exactamente como en tu Streamlit: primera frase entre 20 y 160 caracteres
+            primera_frase = re.split(r'(?<=[.!?])\s+', texto_sin_urls)[0]
+            tit_corto = primera_frase if 20 <= len(primera_frase) <= 160 else texto_sin_urls[:140]
 
             mensajes.append({
-                "id": f"TG-{hash(link)}",
                 "plataforma": "TELEGRAM",
                 "canal": f"@{canal}",
                 "fecha_dt": dt_obj,
-                "titular_raw": texto_despacho,
-                "cuerpo_raw": "",
+                "titular_raw": tit_corto,
+                "cuerpo_raw": texto_sin_urls[:350],
                 "enlace": link
             })
     except Exception:
@@ -444,7 +445,6 @@ def procesar_un_feed_rss(datos_feed):
             url_destino = decodificar_url_google_news_offline(link)
 
             items.append({
-                "id": f"RSS-{hash(link)}",
                 "plataforma": "PRENSA",
                 "canal": etiqueta,
                 "fecha_dt": dt_obj,
@@ -482,11 +482,15 @@ def barrido_prensa_multilingue():
                 pass
     return todas
 
+# ==========================================
+# COMPARADOR ANTI-DUPLICADOS (IDÉNTICO A STREAMLIT)
+# ==========================================
 def son_mismo_evento(tit1, tit2):
     t1 = normalizar_texto(limpiar_firma_medio(re.sub(r'\[.*?\]', '', tit1)))
     t2 = normalizar_texto(limpiar_firma_medio(re.sub(r'\[.*?\]', '', tit2)))
     if len(t1) < 15 or len(t2) < 15:
         return False
+    # Umbral exacto de tu web para consolidar noticias de diferentes periódicos
     return SequenceMatcher(None, t1[:95], t2[:95]).ratio() > 0.68
 
 # ==========================================
@@ -528,6 +532,10 @@ def generar_html_email(alertas):
             fecha_str = a.get('fecha_dt').strftime('%d/%m/%Y %H:%M')
             canal = html_module.escape(str(a.get('canal', '')))
             enlace = html_module.escape(str(a.get('enlace', '#')))
+            
+            # Botón adicional para abrir traducción directa en Google Translate con un clic
+            texto_traducir_url = quote(str(a.get('titular_original', '')))
+            btn_traducir = f"""&nbsp;|&nbsp;<a href="https://translate.google.com/?sl=auto&tl=es&text={texto_traducir_url}&op=translate" target="_blank" style="color:#0369a1; font-size:11px; font-weight:700; text-decoration:none;">🌐 Abrir en Traductor</a>""" if a.get("categoria") == "TELEGRAM" else ""
 
             html += f"""
             <div style="border:1px solid #e2e8f0; border-left:4px solid {cat_color}; padding:8px 12px; margin-bottom:8px; border-radius:3px; background:#ffffff;">
@@ -542,7 +550,8 @@ def generar_html_email(alertas):
                     <strong>🧠 Evaluación:</strong> {ana}
                 </div>
                 <div>
-                    <a href="{enlace}" target="_blank" style="color:#0284c7; font-size:11px; font-weight:700;">🔗 Noticia / Despacho original en {canal} &rarr;</a>
+                    <a href="{enlace}" target="_blank" style="color:#0284c7; font-size:11px; font-weight:700;">🔗 Fuente / Noticia en {canal} &rarr;</a>
+                    {btn_traducir}
                 </div>
             </div>
             """
@@ -575,6 +584,7 @@ def main():
     todos_brutos = brutos_tg + brutos_prensa + brutos_rumafia + brutos_antikor
     todos_brutos.sort(key=lambda x: x["fecha_dt"], reverse=True)
 
+    # FASE 1: Deduplicación por enlace y titular crudo (idéntica a Streamlit)
     pre_unicos = []
     urls_vistas = set()
     for b in todos_brutos:
@@ -590,9 +600,11 @@ def main():
         print("No se encontraron alertas en las últimas 48 horas.")
         return
 
+    # FASE 2: Traducción con hilos
     with ThreadPoolExecutor(max_workers=8) as ex:
         titulares_traducidos = list(ex.map(lambda it: traducir_solo_titular(it["titular_raw"]), pre_unicos))
 
+    # FASE 3: Clasificación y SEGUNDA deduplicación (evita duplicados Cripto y multilingües)
     alertas_finales = []
     for item, tit_es in zip(pre_unicos, titulares_traducidos):
         cuerpo_intacto = item["cuerpo_raw"]
@@ -619,23 +631,24 @@ def main():
                 cat_final = "GLOBAL"
 
         nueva_alerta = {
-            "id": item["id"],
             "plataforma": item["plataforma"],
             "canal": item["canal"],
             "fecha_dt": item["fecha_dt"],
             "titular": titular_final,
+            "titular_original": item["titular_raw"],
             "categoria": cat_final,
             "evaluacion_contexto": generar_analisis_contexto(cat_final),
             "enlace": item["enlace"]
         }
 
+        # Segunda pasada de deduplicación sobre el titular ya traducido
         if not any(son_mismo_evento(nueva_alerta["titular"], ex["titular"]) for ex in alertas_finales):
             alertas_finales.append(nueva_alerta)
 
     if alertas_finales and EMAIL_EMISOR and PASSWORD_EMISOR and EMAIL_DESTINO:
         html = generar_html_email(alertas_finales)
         enviar_correo(html, len(alertas_finales))
-        print(f"Correo enviado exitosamente con {len(alertas_finales)} alertas sincronizadas.")
+        print(f"Correo enviado exitosamente con {len(alertas_finales)} alertas consolidadas.")
     else:
         print("No hay alertas recientes verificadas o faltan credenciales.")
 
