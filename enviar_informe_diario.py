@@ -14,7 +14,6 @@ from urllib.parse import urlparse, urlunparse, quote
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
-import time
 
 # ==========================================
 # CONFIGURACIÓN Y CREDENCIALES
@@ -88,7 +87,7 @@ def decodificar_url_google_news_offline(url_rss):
     return url_rss
 
 # ==========================================
-# TRADUCTOR MULTISOURCE TOLERANTE A ACCIONES
+# TRADUCTOR MULTISOURCE
 # ==========================================
 def traducir_solo_titular(titular_orig):
     if not titular_orig:
@@ -107,9 +106,9 @@ def traducir_solo_titular(titular_orig):
         medio_suffix = m_medio.group(1)
         texto_a_traducir = t_clean[:m_medio.start()].strip()
 
-    # 1. Intento API MyMemory (libre de bloqueos de IP en nube)
+    # Intento 1: API MyMemory
     try:
-        url_my = f"https://api.mymemory.translated.net/get?q={quote(texto_a_traducir[:350])}&langpair=autodetect|es"
+        url_my = f"https://api.mymemory.translated.net/get?q={quote(texto_a_traducir[:450])}&langpair=autodetect|es"
         r = SESION_HTTP.get(url_my, timeout=3.5)
         if r.status_code == 200:
             datos = r.json()
@@ -122,10 +121,10 @@ def traducir_solo_titular(titular_orig):
     except Exception:
         pass
 
-    # 2. Intento Google GTX
+    # Intento 2: Google endpoint directo
     try:
         url = "https://translate.googleapis.com/translate_a/single"
-        params = {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:350]}
+        params = {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:450]}
         r = SESION_HTTP.get(url, params=params, timeout=2.5)
         if r.status_code == 200:
             data = r.json()
@@ -377,16 +376,16 @@ def raspar_un_canal_tg(canal):
             a_link = p.find("a", class_="tgme_widget_message_date")
             link = a_link["href"] if a_link and a_link.get("href") else f"https://t.me/s/{canal}"
 
-            primera_frase = re.split(r'(?<=[.!?])\s+', texto_sin_urls)[0]
-            tit_corto = primera_frase if 20 <= len(primera_frase) <= 160 else texto_sin_urls[:140]
+            # Extrae el texto legible completo sin cortar con puntos suspensivos
+            texto_despacho = texto_sin_urls[:420].strip()
 
             mensajes.append({
                 "id": f"TG-{hash(link)}",
                 "plataforma": "TELEGRAM",
                 "canal": f"@{canal}",
                 "fecha_dt": dt_obj,
-                "titular_raw": tit_corto,
-                "cuerpo_raw": texto_sin_urls[:2200],
+                "titular_raw": texto_despacho,
+                "cuerpo_raw": "",
                 "enlace": link
             })
     except Exception:
@@ -536,14 +535,14 @@ def generar_html_email(alertas):
                     <span style="background:#fef08a; color:#854d0e; padding:1px 4px; border-radius:2px; border:1px solid #eab308; margin-right:4px;">🔥 48H</span>
                     📅 {fecha_str} UTC | 📢 {canal}
                 </div>
-                <div style="font-size:13.5px; font-weight:700; color:#0f172a; margin-bottom:6px;">
+                <div style="font-size:13.5px; font-weight:700; color:#0f172a; margin-bottom:6px; line-height:1.4;">
                     {tit}
                 </div>
                 <div style="font-size:11px; color:#0369a1; background:#f0f9ff; padding:5px 8px; border-radius:2px; margin-bottom:6px; border-left:3px solid #0284c7;">
                     <strong>🧠 Evaluación:</strong> {ana}
                 </div>
                 <div>
-                    <a href="{enlace}" target="_blank" style="color:#0284c7; font-size:11px; font-weight:700;">🔗 Noticia original en {canal} &rarr;</a>
+                    <a href="{enlace}" target="_blank" style="color:#0284c7; font-size:11px; font-weight:700;">🔗 Noticia / Despacho original en {canal} &rarr;</a>
                 </div>
             </div>
             """
