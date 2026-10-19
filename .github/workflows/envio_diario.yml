@@ -1,0 +1,30 @@
+name: Envio Diario OSINT
+
+on:
+  schedule:
+    # 06:00 UTC = 07:00 / 08:00 (hora peninsular de España)
+    - cron: '0 6 * * *'
+  workflow_dispatch: # Permite probar el envío manualmente con un botón
+
+jobs:
+  ejecutar-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar codigo
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: |
+          pip install requests beautifulsoup4
+
+      - name: Ejecutar rastreador y enviar email
+        env:
+          EMAIL_EMISOR: ${{ secrets.EMAIL_EMISOR }}
+          PASSWORD_EMISOR: ${{ secrets.PASSWORD_EMISOR }}
+          EMAIL_DESTINO: ${{ secrets.EMAIL_DESTINO }}
+        run: python enviar_informe_diario.py
