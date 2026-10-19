@@ -4,7 +4,6 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from bs4 import BeautifulSoup
 import re
-import base64
 import html as html_module
 from email.utils import parsedate_to_datetime
 import unicodedata
@@ -46,8 +45,8 @@ def limpiar_firma_medio(texto):
 
 def limpiar_url(url):
     try:
-        parsed = urlparse(url)
-        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', '', ''))
+        p = urlparse(url)
+        return urlunparse((p.scheme, p.netloc, p.path, '', '', ''))
     except Exception:
         return url
 
@@ -59,23 +58,6 @@ def es_reciente_48h(fecha_dt):
     ahora = datetime.now(timezone.utc)
     diferencia = ahora - fecha_dt.astimezone(timezone.utc)
     return timedelta(hours=-24) <= diferencia <= timedelta(hours=48)
-
-def decodificar_url_google_news_offline(url_rss):
-    if not url_rss or "news.google.com" not in url_rss:
-        return url_rss
-    try:
-        m = re.search(r'articles/([A-Za-z0-9_-]+)', url_rss)
-        if m:
-            token = m.group(1)
-            pad = token + "=" * ((4 - len(token) % 4) % 4)
-            b = base64.urlsafe_b64decode(pad)
-            for u in re.findall(rb'https?://[^\s"\'<>\\\x00-\x1f\x7f-\xff]+', b):
-                u_str = u.decode('utf-8', errors='ignore')
-                if "google.com" not in u_str and len(u_str) > 16:
-                    return u_str
-    except Exception:
-        pass
-    return url_rss
 
 def traducir_solo_titular(titular_orig):
     if not titular_orig:
@@ -126,19 +108,6 @@ def traducir_solo_titular(titular_orig):
     CACHE_TITULARES[t_clean] = t_clean
     return t_clean
 
-def extraer_resumen_rss(tit_orig, desc_rss):
-    if not desc_rss:
-        return limpiar_firma_medio(tit_orig)
-    try:
-        soup = BeautifulSoup(desc_rss, "html.parser")
-        textos = [limpiar_html_texto(tag.get_text(" ", strip=True)) for tag in soup.find_all(["li", "p", "a", "font", "div"]) if len(tag.get_text()) > 20]
-        if textos:
-            return " — ".join(textos)[:1800]
-    except Exception:
-        pass
-    limpio = limpiar_html_texto(desc_rss)
-    return limpio[:1800] if len(limpio) > 25 else limpiar_firma_medio(tit_orig)
-
 EMPRESAS_ESTRATEGICAS_ESP = [
     "indra", "grupo oesia", "oesia", "uav navigation", "tecnobit", "navantia",
     "escribano", "em&e", "sener", "arquimea", "destinus", "santa barbara", "gdels",
@@ -163,7 +132,7 @@ def es_publicidad_o_spam(texto):
     spam = ["master profesional", "lisa institute", "udima", "beca", "matriculate", "curso online", "descuento", "sorteo", "casino", "apuestas", "tarot", "horoscopo", "oferta de empleo"]
     return any(s in t for s in spam)
 
-def tiene_vinculo_ruso_estricto(texto):
+def tiene_vinculo_ruso(texto):
     if not texto or es_publicidad_o_spam(texto):
         return False
     t_raw = str(texto).lower()
@@ -171,46 +140,24 @@ def tiene_vinculo_ruso_estricto(texto):
     raices = ["росси", "рф", "москв", "кремл", "путин", "гру", "фсб", "свр", "украин", "киев", "київ", "зсу", "всу", "сбу", "гур", "донбасс", "крым", "беларус", "вагнер", "шахед", "геран", "искандер"]
     return any(c in t_raw for c in raices) or any(r in t_norm for r in ACTORES_RUSIA_ESTRICTOS)
 
-def tiene_vector_amenaza_estricto(texto):
+def tiene_amenaza(texto):
     t_raw = str(texto).lower()
     t_norm = normalizar_texto(texto)
     cir = ["диверс", "шпион", "агент", "хакер", "кибер", "ддос", "ddos", "саботаж", "гибрид", "крипт", "биткоин", "usdt", "бпла", "дрон", "рэб", "арест", "задержан", "санкц", "кабел", "флот", "казн", "пленн", "военн", "преступлен", "поджог", "теракт"]
     lat = ["hibrid", "hybrid", "sabotaj", "sabotage", "espia", "espionaje", "spy", "espionage", "ciber", "cyber", "hack", "ddos", "malware", "ransomware", "apt28", "apt29", "sandworm", "noname057", "killnet", "desinformacion", "disinformation", "propaganda", "cripto", "crypto", "bitcoin", "btc", "usdt", "tether", "garantex", "sancion", "sanction", "flota fantasma", "shadow fleet", "cable submarino", "crimen de guerra", "war crime", "icc", "detenido", "arrestado", "arrested", "detained", "dron", "uav", "jamming"]
     return any(c in t_raw for c in cir) or any(v in t_norm for v in lat)
 
-def es_crimen_guerra(titular, cuerpo):
-    t_all = normalizar_texto(f"{titular} {cuerpo}")
-    patron = r'\b(crimen de guerra|crimenes de guerra|war crime|war crimes|corte penal internacional|tribunal penal|lesa humanidad|genocidio|pow execution|tortura|bucha|mariupol|fosa comun)\b'
-    return bool(re.search(patron, t_all))
-
-def es_detencion(titular, cuerpo):
-    t_tit = normalizar_texto(titular)
-    t_all = normalizar_texto(f"{titular} {cuerpo}")
-    return bool(re.search(r'\b(detenido|detenidos|arrestado|arrestados|arrested|detained)\b', t_tit)) and bool(re.search(r'\b(espia|spy|espionage|espionaje|sabotaje|gru|fsb)\b', t_all))
-
-def es_cripto(titular, cuerpo):
-    t_all = normalizar_texto(f"{titular} {cuerpo}")
-    return bool(re.search(r'\b(cripto|crypto|usdt|tether|btc|bitcoin|garantex|sancion|sanction)\b', t_all))
-
-def es_empresa_esp(titular, cuerpo):
-    t_all = normalizar_texto(f"{titular} {cuerpo}")
-    return any(re.search(r'\b' + re.escape(emp) + r'\b', t_all) for emp in EMPRESAS_ESTRATEGICAS_ESP)
-
-def es_espana(titular, cuerpo):
-    t_all = normalizar_texto(f"{titular} {cuerpo}")
-    return bool(re.search(r'\b(espana|spain|madrid|cni|incibe|guardia civil|policia nacional)\b', t_all))
-
-def clasificar(tit, cuerpo):
-    tit_sin_medio = limpiar_firma_medio(tit)
-    if es_crimen_guerra(tit_sin_medio, cuerpo):
+def clasificar(tit):
+    t_all = normalizar_texto(tit)
+    if re.search(r'\b(crimen de guerra|war crime|corte penal internacional|genocidio|tortura)\b', t_all):
         return "CRIMENES"
-    if es_detencion(tit_sin_medio, cuerpo):
+    if re.search(r'\b(detenido|arrestado|arrested|detained)\b', t_all) and re.search(r'\b(espia|spy|espionaje|sabotaje|gru|fsb)\b', t_all):
         return "DETENCION"
-    if es_cripto(tit_sin_medio, cuerpo):
+    if re.search(r'\b(cripto|crypto|usdt|bitcoin|btc|tether|garantex|sancion|sanction)\b', t_all):
         return "CRIPTO"
-    if es_empresa_esp(tit_sin_medio, cuerpo):
+    if any(re.search(r'\b' + re.escape(emp) + r'\b', t_all) for emp in EMPRESAS_ESTRATEGICAS_ESP):
         return "EMPRESA"
-    if es_espana(tit_sin_medio, cuerpo):
+    if re.search(r'\b(espana|spain|madrid|cni|incibe|guardia civil|policia nacional)\b', t_all):
         return "ESPANA"
     return "GLOBAL"
 
@@ -244,7 +191,7 @@ def raspar_un_canal_tg(canal):
             txt = t_div.get_text(separator=" ", strip=True) if t_div else ""
             if len(txt) < 25 or es_publicidad_o_spam(txt):
                 continue
-            if not (tiene_vinculo_ruso_estricto(txt) and tiene_vector_amenaza_estricto(txt)):
+            if not (tiene_vinculo_ruso(txt) and tiene_amenaza(txt)):
                 continue
 
             txt_sin_url = limpiar_html_texto(re.sub(r'http\S+', '', txt))
@@ -269,12 +216,11 @@ def raspar_un_canal_tg(canal):
             tit_corto = primera_frase if 20 <= len(primera_frase) <= 160 else txt_sin_url[:140]
 
             mensajes.append({
-                "plataforma": "TELEGRAM",
                 "canal": f"@{canal}",
                 "fecha_dt": dt,
                 "titular_raw": tit_corto,
-                "cuerpo_raw": "",
-                "enlace": link
+                "enlace": link,
+                "es_tg": True
             })
     except Exception:
         pass
@@ -305,8 +251,8 @@ def procesar_feed(datos):
                 pub = it.findtext("pubDate", "")
                 if len(tit) < 15 or es_publicidad_o_spam(tit + " " + desc):
                     continue
-                cuerpo = extraer_resumen_rss(tit, desc)
-                if not (tiene_vinculo_ruso_estricto(f"{tit} {cuerpo}") and tiene_vector_amenaza_estricto(f"{tit} {cuerpo}")):
+                txt_eval = f"{tit} {desc}"
+                if not (tiene_vinculo_ruso(txt_eval) and tiene_amenaza(txt_eval)):
                     continue
                 try:
                     dt = parsedate_to_datetime(pub).astimezone(timezone.utc)
@@ -315,12 +261,11 @@ def procesar_feed(datos):
                 if not es_reciente_48h(dt):
                     continue
                 items.append({
-                    "plataforma": "PRENSA",
                     "canal": etiqueta,
                     "fecha_dt": dt,
                     "titular_raw": tit,
-                    "cuerpo_raw": cuerpo,
-                    "enlace": decodificar_url_google_news_offline(link)
+                    "enlace": limpiar_url(link),
+                    "es_tg": False
                 })
     except Exception:
         pass
@@ -381,9 +326,6 @@ def generar_html_email(alertas):
             canal = html_module.escape(str(a.get('canal', '')))
             enlace = html_module.escape(str(a.get('enlace', '#')))
 
-            # En Telegram añadimos enlace de traducción directa por si se desea contrastar
-            btn_trad = f"""&nbsp;|&nbsp;<a href="https://translate.google.com/?sl=auto&tl=es&text={quote(str(a.get('titular_original', '')))}&op=translate" target="_blank" style="color:#0369a1; font-size:11px; font-weight:700; text-decoration:none;">🌐 Ver en Traductor</a>""" if a.get("categoria") == "TELEGRAM" else ""
-
             html += f"""
             <div style="border:1px solid #e2e8f0; border-left:4px solid {cat_color}; padding:8px 12px; margin-bottom:8px; border-radius:3px; background:#ffffff;">
                 <div style="font-size:10.5px; color:#64748b; font-weight:700; margin-bottom:4px;">
@@ -397,8 +339,7 @@ def generar_html_email(alertas):
                     <strong>🧠 Evaluación:</strong> {ana}
                 </div>
                 <div>
-                    <a href="{enlace}" target="_blank" style="color:#0284c7; font-size:11px; font-weight:700;">🔗 Fuente original en {canal} &rarr;</a>
-                    {btn_trad}
+                    <a href="{enlace}" target="_blank" style="color:#0284c7; font-size:11px; font-weight:700;">🔗 Noticia / Despacho original en {canal} &rarr;</a>
                 </div>
             </div>
             """
@@ -427,52 +368,4 @@ def main():
         u = limpiar_url(b["enlace"])
         if u in urls_vistas:
             continue
-        if any(son_mismo_evento(b["titular_raw"], ex["titular_raw"]) for ex in pre_unicos):
-            continue
-        urls_vistas.add(u)
-        pre_unicos.append(b)
-
-    if not pre_unicos:
-        print("No hay noticias en las últimas 48 horas.")
-        return
-
-    # 2. Traducción de titulares
-    with ThreadPoolExecutor(max_workers=8) as ex:
-        titulares_traducidos = list(ex.map(lambda it: traducir_solo_titular(it["titular_raw"]), pre_unicos))
-
-    # 3. Deduplicación secundaria tras traducir (elimina duplicados entre distintos idiomas y periódicos)
-    alertas_finales = []
-    for item, tit_es in zip(pre_unicos, titulares_traducidos):
-        cuerpo = item["cuerpo_raw"]
-
-        if item["plataforma"] == "TELEGRAM":
-            canal_tag = item["canal"].replace("@", "").upper()
-            titular_final = f"[{canal_tag}] {tit_es}"
-            cat_final = "TELEGRAM"
-        else:
-            titular_final = tit_es
-            cat_final = clasificar(titular_final, cuerpo)
-
-        nueva_alerta = {
-            "canal": item["canal"],
-            "fecha_dt": item["fecha_dt"],
-            "titular": titular_final,
-            "titular_original": item["titular_raw"],
-            "categoria": cat_final,
-            "evaluacion": evaluacion_contexto(cat_final),
-            "enlace": item["enlace"]
-        }
-
-        # Comprueba que no exista ya otra noticia con el mismo titular traducido (elimina el caso Bitcoin CoinGape vs Cryptonews)
-        if not any(son_mismo_evento(nueva_alerta["titular"], ex["titular"]) for ex in alertas_finales):
-            alertas_finales.append(nueva_alerta)
-
-    if alertas_finales and EMAIL_EMISOR and PASSWORD_EMISOR and EMAIL_DESTINO:
-        html = generar_html_email(alertas_finales)
-        enviar_correo(html, len(alertas_finales))
-        print(f"Correo enviado correctamente con {len(alertas_finales)} alertas.")
-    else:
-        print("No hay alertas o faltan credenciales.")
-
-if __name__ == "__main__":
-    main()
+        if any(son_mismo
