@@ -22,7 +22,7 @@ jobs:
 
       - name: Instalar dependencias
         run: |
-          pip install requests beautifulsoup4 deep-translator
+          pip install requests beautifulsoup4
 
       - name: Ejecutar rastreador y enviar email
         env:
