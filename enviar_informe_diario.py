@@ -368,4 +368,48 @@ def main():
         u = limpiar_url(b["enlace"])
         if u in urls_vistas:
             continue
-        if any(son_mismo
+        if any(son_mismo_evento(b["titular_raw"], ex["titular_raw"]) for ex in pre_unicos):
+            continue
+        urls_vistas.add(u)
+        pre_unicos.append(b)
+
+    if not pre_unicos:
+        print("No hay noticias en las últimas 48 horas.")
+        return
+
+    # 2. Traducción de titulares
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        titulares_traducidos = list(ex.map(lambda it: traducir_solo_titular(it["titular_raw"]), pre_unicos))
+
+    # 3. Deduplicación secundaria tras traducir
+    alertas_finales = []
+    for item, tit_es in zip(pre_unicos, titulares_traducidos):
+        if item["es_tg"]:
+            canal_tag = item["canal"].replace("@", "").upper()
+            titular_final = f"[{canal_tag}] {tit_es}"
+            cat_final = "TELEGRAM"
+        else:
+            titular_final = tit_es
+            cat_final = clasificar(titular_final)
+
+        nueva_alerta = {
+            "canal": item["canal"],
+            "fecha_dt": item["fecha_dt"],
+            "titular": titular_final,
+            "categoria": cat_final,
+            "evaluacion": evaluacion_contexto(cat_final),
+            "enlace": item["enlace"]
+        }
+
+        if not any(son_mismo_evento(nueva_alerta["titular"], ex["titular"]) for ex in alertas_finales):
+            alertas_finales.append(nueva_alerta)
+
+    if alertas_finales and EMAIL_EMISOR and PASSWORD_EMISOR and EMAIL_DESTINO:
+        html = generar_html_email(alertas_finales)
+        enviar_correo(html, len(alertas_finales))
+        print(f"Correo enviado correctamente con {len(alertas_finales)} alertas.")
+    else:
+        print("No hay alertas o faltan credenciales.")
+
+if __name__ == "__main__":
+    main()
