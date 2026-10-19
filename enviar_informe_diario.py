@@ -13,6 +13,7 @@ from urllib.parse import urlparse, urlunparse
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+import time
 from deep_translator import GoogleTranslator
 
 # ==========================================
@@ -68,56 +69,71 @@ def es_reciente_48h(fecha_dt):
     return timedelta(hours=-24) <= diferencia <= timedelta(hours=48)
 
 # ==========================================
-# DEDUPLICACIÓN DE NOTICIAS DE DISTINTOS MEDIOS
+# DEDUPLICACIÓN REFORZADA MULTIMEDIO
 # ==========================================
-def obtener_palabras_clave_titular(texto):
-    t_norm = normalizar_texto(limpiar_firma_medio(texto))
-    palabras = re.findall(r'\b[a-z0-9]{4,}\b', t_norm)
+def extraer_tokens_clave(texto):
+    t_limpio = normalizar_texto(limpiar_firma_medio(texto))
+    palabras = re.findall(r'\b[a-záéíóúñ0-9]{4,}\b', t_limpio)
     stop_words = {
         "para", "como", "sobre", "entre", "este", "esta", "estos", "estas",
         "desde", "hacia", "contra", "rusia", "ruso", "rusa", "rusos", "ucrania",
-        "informe", "noticias", "noticia", "ultimo", "minuto", "segun", "afirma"
+        "informe", "noticias", "noticia", "ultimo", "minuto", "segun", "afirma",
+        "dice", "tras", "durante", "habria", "pueden", "seria", "nuevo", "nueva"
     }
     return set(p for p in palabras if p not in stop_words)
 
-def son_mismo_evento(tit1, tit2):
-    t1 = normalizar_texto(limpiar_firma_medio(re.sub(r'\[.*?\]', '', tit1)))
-    t2 = normalizar_texto(limpiar_firma_medio(re.sub(r'\[.*?\]', '', tit2)))
-    if len(t1) < 15 or len(t2) < 15:
-        return False
-
-    ratio_texto = SequenceMatcher(None, t1[:100], t2[:100]).ratio()
-    if ratio_texto > 0.65:
+def son_noticias_duplicadas(item1, item2):
+    # 1. Comparación estricta de titulares
+    t1 = normalizar_texto(limpiar_firma_medio(item1["titular"]))
+    t2 = normalizar_texto(limpiar_firma_medio(item2["titular"]))
+    
+    if SequenceMatcher(None, t1[:90], t2[:90]).ratio() > 0.60:
         return True
 
-    kw1 = obtener_palabras_clave_titular(tit1)
-    kw2 = obtener_palabras_clave_titular(tit2)
-    if kw1 and kw2:
-        interseccion = kw1.intersection(kw2)
-        if len(interseccion) >= 4:
+    # 2. Coincidencia de tokens clave en el titular
+    k1 = extraer_tokens_clave(t1)
+    k2 = extraer_tokens_clave(t2)
+    if k1 and k2:
+        interseccion = k1.intersection(k2)
+        if len(interseccion) >= 3 and (len(interseccion) / min(len(k1), len(k2))) >= 0.5:
             return True
+
+    # 3. Mismo origen o enlace limpio
+    if item1["enlace"] and item2["enlace"] and item1["enlace"] == item2["enlace"]:
+        return True
 
     return False
 
 # ==========================================
-# TRADUCCIÓN (TITULARES Y TEXTOS DE TELEGRAM)
+# TRADUCTOR BLINDADO (TITULARES Y TELEGRAM)
 # ==========================================
-def decodificar_url_google_news_offline(url_rss):
-    if not url_rss or "news.google.com" not in url_rss:
-        return url_rss
+def traducir_con_reintentos(texto_corto):
+    if not texto_corto or len(texto_corto.strip()) < 3:
+        return texto_corto
+    
+    # Intento 1: deep-translator
+    for intento in range(3):
+        try:
+            trad = GoogleTranslator(source='auto', target='es').translate(texto_corto)
+            if trad and len(trad.strip()) > 0:
+                return trad
+        except Exception:
+            time.sleep(1.0)
+
+    # Intento 2 (Fallback directo por API pública)
     try:
-        m = re.search(r'articles/([A-Za-z0-9_-]+)', url_rss)
-        if m:
-            token = m.group(1)
-            pad = token + "=" * ((4 - len(token) % 4) % 4)
-            b = base64.urlsafe_b64decode(pad)
-            for u in re.findall(rb'https?://[^\s"\'<>\\\x00-\x1f\x7f-\xff]+', b):
-                u_str = u.decode('utf-8', errors='ignore')
-                if "google.com" not in u_str and len(u_str) > 16:
-                    return u_str
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_corto}
+        r = SESION_HTTP.get(url, params=params, timeout=4.0)
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
+                partes = [seg[0] for seg in data[0] if isinstance(seg, list) and seg[0]]
+                return "".join(partes)
     except Exception:
         pass
-    return url_rss
+
+    return texto_corto
 
 def traducir_titular(titular_orig):
     if not titular_orig:
@@ -135,52 +151,61 @@ def traducir_titular(titular_orig):
         medio_suffix = m_medio.group(1)
         texto_a_traducir = t_clean[:m_medio.start()].strip()
 
-    try:
-        traducido = GoogleTranslator(source='auto', target='es').translate(texto_a_traducir[:450])
-        resultado = f"{traducido}{medio_suffix}" if medio_suffix else traducido
-        CACHE_TITULARES[t_clean] = resultado
-        return resultado
-    except Exception:
-        CACHE_TITULARES[t_clean] = t_clean
-        return t_clean
+    trad = traducir_con_reintentos(texto_a_traducir[:350])
+    resultado = f"{trad}{medio_suffix}" if medio_suffix else trad
+    CACHE_TITULARES[t_clean] = resultado
+    time.sleep(0.3)
+    return resultado
 
-def traducir_texto_largo(texto):
-    if not texto:
+def traducir_cuerpo_telegram(texto_largo):
+    if not texto_largo:
         return ""
-    t_clean = limpiar_html_texto(texto)
+    t_clean = limpiar_html_texto(texto_largo)
     if len(t_clean) < 10:
         return t_clean
     if t_clean in CACHE_CUERPOS:
         return CACHE_CUERPOS[t_clean]
 
+    # Cortar en frases para no saturar los límites de la API
+    oraciones = [o.strip() for o in re.split(r'(?<=[.!?\n])\s+', t_clean) if o.strip()]
+    bloques = []
+    bloque = ""
+    for o in oraciones:
+        if len(bloque) + len(o) < 300:
+            bloque += (" " + o if bloque else o)
+        else:
+            if bloque:
+                bloques.append(bloque)
+            bloque = o
+    if bloque:
+        bloques.append(bloque)
+
+    traducidos = []
+    for b in bloques:
+        trad_b = traducir_con_reintentos(b)
+        traducidos.append(trad_b)
+        time.sleep(0.4)
+
+    resultado = " ".join(traducidos)
+    CACHE_CUERPOS[t_clean] = resultado
+    return resultado
+
+def decodificar_url_google_news_offline(url_rss):
+    if not url_rss or "news.google.com" not in url_rss:
+        return url_rss
     try:
-        # Se divide en bloques de 400 caracteres respetando oraciones para una traducción fluida
-        partes = [p.strip() for p in re.split(r'(?<=[.!?\n])\s+', t_clean) if p.strip()]
-        bloques = []
-        bloque_actual = ""
-
-        for p in partes:
-            if len(bloque_actual) + len(p) < 420:
-                bloque_actual += (" " + p if bloque_actual else p)
-            else:
-                if bloque_actual:
-                    bloques.append(bloque_actual)
-                bloque_actual = p
-        if bloque_actual:
-            bloques.append(bloque_actual)
-
-        traductor = GoogleTranslator(source='auto', target='es')
-        traducidos = []
-        for b in bloques:
-            trad = traductor.translate(b)
-            traducidos.append(trad if trad else b)
-
-        resultado = " ".join(traducidos)
-        CACHE_CUERPOS[t_clean] = resultado
-        return resultado
+        m = re.search(r'articles/([A-Za-z0-9_-]+)', url_rss)
+        if m:
+            token = m.group(1)
+            pad = token + "=" * ((4 - len(token) % 4) % 4)
+            b = base64.urlsafe_b64decode(pad)
+            for u in re.findall(rb'https?://[^\s"\'<>\\\x00-\x1f\x7f-\xff]+', b):
+                u_str = u.decode('utf-8', errors='ignore')
+                if "google.com" not in u_str and len(u_str) > 16:
+                    return u_str
     except Exception:
-        CACHE_CUERPOS[t_clean] = t_clean
-        return t_clean
+        pass
+    return url_rss
 
 def extraer_resumen_rss(tit_orig, desc_rss):
     if not desc_rss:
@@ -310,7 +335,7 @@ def obtener_telegram():
             r = SESION_HTTP.get(f"https://t.me/s/{c}", timeout=5.0)
             if r.status_code == 200:
                 soup = BeautifulSoup(r.text, "html.parser")
-                for p in soup.find_all("div", class_="tgme_widget_message_wrap")[-20:]:
+                for p in soup.find_all("div", class_="tgme_widget_message_wrap")[-15:]:
                     t_div = p.find("div", class_="tgme_widget_message_text")
                     txt = t_div.get_text(separator=" ", strip=True) if t_div else ""
                     if len(txt) < 30 or not (tiene_vinculo_ruso(txt) and tiene_amenaza(txt)):
@@ -326,11 +351,14 @@ def obtener_telegram():
                         continue
                     a_link = p.find("a", class_="tgme_widget_message_date")
                     link = a_link["href"] if a_link and a_link.get("href") else f"https://t.me/s/{c}"
+                    
+                    # Titular sintético de las primeras palabras
+                    primeras_palabras = txt.strip()[:110]
                     items.append({
                         "canal": f"@{c}",
                         "fecha_dt": dt,
-                        "titular_raw": f"[{c.upper()}] {txt[:120]}...",
-                        "cuerpo": txt[:1800],
+                        "titular_raw": f"[{c.upper()}] {primeras_palabras}...",
+                        "cuerpo": txt[:1400],
                         "enlace": link,
                         "cat_fija": "TELEGRAM",
                         "es_telegram": True
@@ -359,7 +387,7 @@ def generar_html_email(alertas):
         <div style="max-width:700px; margin:0 auto; background:#ffffff; padding:20px; border-radius:6px; border:1px solid #cbd5e1;">
             <div style="background:#0f172a; color:#ffffff; padding:14px; border-left:6px solid #dc2626; border-radius:4px; margin-bottom:16px;">
                 <h2 style="margin:0 0 4px 0; font-size:17px;">INFORME OSINT - ÚLTIMAS 48 HORAS</h2>
-                <p style="margin:0; font-size:12px; color:#cbd5e1;">Emisión: {fecha_str} | Alertas verificadas: {len(alertas)}</p>
+                <p style="margin:0; font-size:12px; color:#cbd5e1;">Emisión: {fecha_str} | Alertas consolidadas: {len(alertas)}</p>
             </div>
     """
     for cod, nombre, color in secciones:
@@ -372,7 +400,7 @@ def generar_html_email(alertas):
         </div>
         """
         for a in sub:
-            cuerpo_telegram = f'<div style="font-size:11.5px; color:#334155; background:#f8fafc; padding:6px 8px; border-radius:3px; margin-bottom:6px; line-height:1.45;"><strong>📄 Mensaje (Traducido):</strong><br>{html_module.escape(a["cuerpo"])}</div>' if a["categoria"] == "TELEGRAM" else ""
+            cuerpo_telegram = f'<div style="font-size:11.5px; color:#334155; background:#f8fafc; padding:8px 10px; border-radius:3px; margin-bottom:6px; line-height:1.5; border:1px solid #e2e8f0;"><strong>📄 Despacho Original Telegram (Traducido):</strong><br>{html_module.escape(a["cuerpo"])}</div>' if a["categoria"] == "TELEGRAM" else ""
             html += f"""
             <div style="border:1px solid #e2e8f0; border-left:4px solid {color}; padding:8px 12px; margin-bottom:8px; border-radius:3px; background:#ffffff;">
                 <div style="font-size:10.5px; color:#64748b; font-weight:700; margin-bottom:4px;">
@@ -408,7 +436,7 @@ def main():
     brutos = obtener_prensa() + obtener_telegram()
     brutos.sort(key=lambda x: x["fecha_dt"], reverse=True)
 
-    # 1. Filtro por enlace exacto
+    # 1. Filtro estricto por enlace
     unicos_por_url = []
     vistos_url = set()
     for b in brutos:
@@ -417,14 +445,13 @@ def main():
             vistos_url.add(u)
             unicos_por_url.append(b)
 
-    # 2. Traducción y clasificación
+    # 2. Traducción robusta (con esperas y fallback)
     alertas_procesadas = []
     for it in unicos_por_url:
         tit_es = traducir_titular(it["titular_raw"])
         
-        # Si proviene de Telegram, traducimos también el cuerpo del mensaje
         if it.get("es_telegram"):
-            cuerpo_es = traducir_texto_largo(it["cuerpo"])
+            cuerpo_es = traducir_cuerpo_telegram(it["cuerpo"])
         else:
             cuerpo_es = it["cuerpo"]
 
@@ -439,10 +466,10 @@ def main():
             "enlace": it["enlace"]
         })
 
-    # 3. Deduplicación semántica entre distintos periódicos
+    # 3. Deduplicación cruzada entre distintos medios
     alertas_finales = []
     for alerta in alertas_procesadas:
-        if not any(son_mismo_evento(alerta["titular"], previa["titular"]) for previa in alertas_finales):
+        if not any(son_noticias_duplicadas(alerta, previa) for previa in alertas_finales):
             alertas_finales.append(alerta)
 
     if alertas_finales and EMAIL_EMISOR and PASSWORD_EMISOR and EMAIL_DESTINO:
@@ -450,7 +477,7 @@ def main():
         enviar_correo(html, len(alertas_finales))
         print(f"Correo enviado correctamente con {len(alertas_finales)} alertas consolidadas.")
     else:
-        print("No hay alertas recientes o faltan credenciales de entorno.")
+        print("No hay alertas recientes o faltan credenciales.")
 
 if __name__ == "__main__":
     main()
