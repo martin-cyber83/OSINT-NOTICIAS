@@ -164,7 +164,6 @@ CANALES_DESINFORMACION_ESP = {
     "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu"
 }
 
-# TÉRMINOS 100% RUSOS / CONFLICTO RUSO OBLIGATORIOS
 PATRON_RUSIA_ESTRICTO = re.compile(
     r'\b('
     r'rusia|ruso|rusa|rusos|rusas|moscu|kremlin|putin|mod rf|fuerzas armadas rusas|'
@@ -182,7 +181,6 @@ RAICES_CIRILICO_RUSIA = [
     "крым", "беларус", "вагнер", "шахед", "геран", "искандер"
 ]
 
-# TEMAS Y PAÍSES AJENOS QUE SE DESCARTAN SALVO MENCIÓN EXPLÍCITA AL KREMLIN/GUERRA
 PATRON_PAISES_AJENOS = re.compile(
     r'\b('
     r'cuba|cubano|cubana|cubanos|la habana|castro|diaz-canel|'
@@ -204,12 +202,9 @@ def tiene_vinculo_ruso_estricto(texto):
     t_raw = str(texto).lower()
     t_norm = normalizar_texto(texto)
 
-    # Si contiene cirílico militar/político ruso, es válido
     if any(c in t_raw for c in RAICES_CIRILICO_RUSIA):
         return True
 
-    # Si trata sobre Cuba, Venezuela, Oriente Medio u otros países ajenos,
-    # SE DESCARTA salvo que el texto trate explícitamente sobre el Kremlin, Putin o la invasión
     if PATRON_PAISES_AJENOS.search(t_norm):
         if not re.search(r'\b(kremlin|putin|tropas rusas|fuerzas armadas rusas|moscu|espionaje ruso|invasion rusa)\b', t_norm):
             return False
@@ -367,7 +362,6 @@ def raspar_un_canal_tg(canal):
         posts = soup.find_all("div", class_="tgme_widget_message_wrap")
 
         for p in posts[-35:]:
-            # 1. Comprobación estricta de fecha (últimas 24h)
             time_tag = p.find("time")
             dt_obj = datetime.now(timezone.utc)
             if time_tag and time_tag.get("datetime"):
@@ -379,18 +373,15 @@ def raspar_un_canal_tg(canal):
             if not es_reciente_24h(dt_obj):
                 continue
 
-            # 2. Comprobación estricta del contenido real (sin firmas ni URLs)
             t_div = p.find("div", class_="tgme_widget_message_text")
             texto_raw = t_div.get_text(separator=" ", strip=True) if t_div else ""
 
             if len(texto_raw) < 25 or es_publicidad_o_spam(texto_raw):
                 continue
 
-            # Limpiar firmas repetitivas del propio canal antes de evaluar
             texto_limpio_eval = re.sub(r'@\w+', '', texto_raw)
             texto_limpio_eval = re.sub(r'https?://\S+', '', texto_limpio_eval)
 
-            # Filtro estricto: Debe ser sobre Rusia/conflicto ruso real (sin temas ajenos)
             if not tiene_vinculo_ruso_estricto(texto_limpio_eval):
                 continue
 
@@ -440,12 +431,10 @@ def raspar_un_canal_tg(canal):
 
 def raspar_telegram_masivo():
     canales = [
-        # Canales militares y tácticos OSINT
         "DIUkraine", "SBUkr", "informnapalm", "cyberresistanceua",
         "entre_guerras", "rybar", "dva_majors", "vchkogpu",
         "meduzalive", "astrapress", "istories_media",
         "ostorozhno_novosti", "nvua_official", "operativnoZSU",
-        # Red de difusión en español (filtrados sin ruido)
         "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu"
     ]
     todos = []
@@ -623,6 +612,8 @@ def ejecutar_actualizacion_total():
     st.session_state.alertas_monitor = alertas_finales
     st.session_state.ultima_actualizacion = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M:%S UTC")
     st.session_state.seleccionadas_pdf = {a["id"] for a in alertas_finales}
+    for a in alertas_finales:
+        st.session_state[f"sel_{a['id']}"] = True
 
 # ==========================================
 # INFORME IMPRIMIBLE (MAQUETACIÓN COMPACTA DIN A4)
@@ -928,6 +919,26 @@ def generar_html_ejecutivo(alertas, solo_48h=False):
     return html
 
 # ==========================================
+# CALLBACKS DE SELECCIÓN SINCRONIZADA
+# ==========================================
+def marcar_todas_callback(lista_ids):
+    st.session_state.seleccionadas_pdf = set(lista_ids)
+    for _id in lista_ids:
+        st.session_state[f"sel_{_id}"] = True
+
+def desmarcar_todas_callback(lista_ids):
+    st.session_state.seleccionadas_pdf = set()
+    for _id in lista_ids:
+        st.session_state[f"sel_{_id}"] = False
+
+def toggle_checkbox_callback(item_id):
+    nuevo_estado = st.session_state.get(f"sel_{item_id}", False)
+    if nuevo_estado:
+        st.session_state.seleccionadas_pdf.add(item_id)
+    else:
+        st.session_state.seleccionadas_pdf.discard(item_id)
+
+# ==========================================
 # INTERFAZ PRINCIPAL DE STREAMLIT
 # ==========================================
 st.set_page_config(
@@ -1045,6 +1056,8 @@ if "arranque_inicial_ok" not in st.session_state:
 if "seleccionadas_pdf" not in st.session_state:
     st.session_state.seleccionadas_pdf = set()
 
+alertas_totales = st.session_state.get("alertas_monitor", [])
+
 col_btn1, col_btn2, col_filtro, col_info = st.columns([1.2, 1.4, 1.1, 1.5])
 
 with col_btn1:
@@ -1056,10 +1069,7 @@ with col_btn1:
 with col_filtro:
     solo_48h = st.checkbox("🔥 Solo Relevantes (Últimas 48h)", value=False)
 
-alertas_totales = st.session_state.get("alertas_monitor", [])
 datos_activos = [x for x in alertas_totales if es_reciente_48h(x.get("fecha_dt"))] if solo_48h else alertas_totales
-
-# Noticias seleccionadas para el informe
 alertas_para_informe = [x for x in datos_activos if x.get("id") in st.session_state.seleccionadas_pdf]
 
 with col_btn2:
@@ -1078,16 +1088,25 @@ with col_info:
         total_total = len(alertas_totales)
         st.markdown(f'<div class="update-timestamp">🕒 <strong>Actualizado:</strong> {st.session_state.ultima_actualizacion} &nbsp;|&nbsp; 🔥 <strong>Últimas 48h:</strong> {total_48h} de {total_total}</div>', unsafe_allow_html=True)
 
-# Botones rápidos de control
+# Botones con callbacks sincronizados
+todos_los_ids = [x["id"] for x in alertas_totales]
 c_sel1, c_sel2, _ = st.columns([1.2, 1.2, 4.0])
+
 with c_sel1:
-    if st.button("✅ Seleccionar todas", use_container_width=True):
-        st.session_state.seleccionadas_pdf = {x["id"] for x in alertas_totales}
-        st.rerun()
+    st.button(
+        "✅ Seleccionar todas",
+        use_container_width=True,
+        on_click=marcar_todas_callback,
+        args=(todos_los_ids,)
+    )
+
 with c_sel2:
-    if st.button("⬜ Desmarcar todas", use_container_width=True):
-        st.session_state.seleccionadas_pdf = set()
-        st.rerun()
+    st.button(
+        "⬜ Desmarcar todas",
+        use_container_width=True,
+        on_click=desmarcar_todas_callback,
+        args=(todos_los_ids,)
+    )
 
 st.write("")
 
@@ -1164,12 +1183,17 @@ def renderizar_tarjetas(lista_items):
 
         col_check, col_card = st.columns([0.05, 0.95])
         with col_check:
-            esta_activa = item_id in st.session_state.seleccionadas_pdf
-            marcado = st.checkbox("Incluir en PDF", value=esta_activa, key=f"sel_{item_id}", label_visibility="collapsed")
-            if marcado:
-                st.session_state.seleccionadas_pdf.add(item_id)
-            else:
-                st.session_state.seleccionadas_pdf.discard(item_id)
+            # Sincronización asegurada por callback
+            if f"sel_{item_id}" not in st.session_state:
+                st.session_state[f"sel_{item_id}"] = (item_id in st.session_state.seleccionadas_pdf)
+
+            st.checkbox(
+                "Incluir en PDF",
+                key=f"sel_{item_id}",
+                on_change=toggle_checkbox_callback,
+                args=(item_id,),
+                label_visibility="collapsed"
+            )
 
         with col_card:
             st.markdown(tarjeta_html, unsafe_allow_html=True)
