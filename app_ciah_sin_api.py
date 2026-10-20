@@ -291,7 +291,7 @@ def generar_analisis_contexto(categoria, canal=""):
     if canal_clean in CANALES_DESINFORMACION_ESP:
         return "Canal clasificado en la red de propaganda, desinformación e injerencia extranjera (FIMI) vinculada al ecosistema pro-Kremlin."
     if categoria == "REDES":
-        return "Monitorización en fuentes abiertas, YouTube y canales especializados en análisis militar y redes sociales sobre el conflicto."
+        return "Contenido capturado en redes sociales, canales de análisis en YouTube y cuentas de seguimiento del conflicto ruso-ucraniano."
     if categoria == "CRIMENES":
         return "Documentación de crímenes de guerra, ataques a población civil e investigaciones de la Corte Penal Internacional."
     if categoria == "EMPRESA":
@@ -307,7 +307,7 @@ def generar_analisis_contexto(categoria, canal=""):
     return "Actividad vinculada a operaciones híbridas globales del Kremlin: ciberataques, sabotaje o desinformación."
 
 # ==========================================
-# RASTREADOR YOUTUBE DIRECTO (RSS / ATOM)
+# RASTREADOR YOUTUBE DIRECTO
 # ==========================================
 def raspar_youtube_canal(canal_id, etiqueta):
     items = []
@@ -363,6 +363,108 @@ def barrido_canales_youtube():
             except Exception:
                 pass
     return todas
+
+# ==========================================
+# RASTREADOR TELEGRAM
+# ==========================================
+def raspar_un_canal_tg(canal):
+    mensajes = []
+    try:
+        r = SESION_HTTP.get(f"https://t.me/s/{canal}", timeout=6.0)
+        if r.status_code != 200:
+            return []
+        soup = BeautifulSoup(r.text, "html.parser")
+        posts = soup.find_all("div", class_="tgme_widget_message_wrap")
+
+        # El canal de Anatolii Sharij se cataloga en REDES
+        es_red_social = (canal == "ASupersharij")
+
+        for p in posts[-35:]:
+            time_tag = p.find("time")
+            dt_obj = datetime.now(timezone.utc)
+            if time_tag and time_tag.get("datetime"):
+                try:
+                    dt_obj = datetime.fromisoformat(time_tag.get("datetime").replace("Z", "+00:00")).astimezone(timezone.utc)
+                except Exception:
+                    pass
+
+            if not es_reciente_24h(dt_obj):
+                continue
+
+            t_div = p.find("div", class_="tgme_widget_message_text")
+            texto_raw = t_div.get_text(separator=" ", strip=True) if t_div else ""
+
+            if len(texto_raw) < 25 or es_publicidad_o_spam(texto_raw):
+                continue
+
+            texto_limpio_eval = re.sub(r'@\w+', '', texto_raw)
+            texto_limpio_eval = re.sub(r'https?://\S+', '', texto_limpio_eval)
+
+            if not tiene_vinculo_ruso_estricto(texto_limpio_eval):
+                continue
+
+            texto_sin_urls = limpiar_html_texto(re.sub(r'http\S+', '', texto_raw))
+            if len(texto_sin_urls) < 20:
+                continue
+
+            foto_url = None
+            tiene_video = False
+
+            for tag_foto in p.find_all("a", class_="tgme_widget_message_photo_wrap"):
+                m = re.search(r"url\(['\"]?(https?://[^'\")]+)['\"]?\)", tag_foto.get("style", ""))
+                if m:
+                    foto_url = m.group(1)
+                    break
+
+            for elem in p.find_all(["i", "div", "a", "video"]):
+                clases = " ".join(elem.get("class", [])) if elem.get("class") else ""
+                if elem.name == "video" or any(v in clases for v in ["video", "roundvideo"]):
+                    tiene_video = True
+                    estilo = elem.get("style", "")
+                    if estilo and not foto_url:
+                        m = re.search(r"url\(['\"]?(https?://[^'\")]+)['\"]?\)", estilo)
+                        if m:
+                            foto_url = m.group(1)
+
+            a_link = p.find("a", class_="tgme_widget_message_date")
+            link = a_link["href"] if a_link and a_link.get("href") else f"https://t.me/s/{canal}"
+
+            primera_frase = re.split(r'(?<=[.!?])\s+', texto_sin_urls)[0]
+            tit_corto = primera_frase if 20 <= len(primera_frase) <= 160 else texto_sin_urls[:140]
+
+            mensajes.append({
+                "id": f"TG-{hash(link)}",
+                "plataforma": "REDES" if es_red_social else "TELEGRAM",
+                "canal": f"Telegram: @{canal}" if es_red_social else f"@{canal}",
+                "fecha_dt": dt_obj,
+                "titular_raw": tit_corto,
+                "cuerpo_raw": texto_sin_urls[:2200],
+                "multimedia": foto_url,
+                "tiene_video": bool(tiene_video),
+                "enlace": link
+            })
+    except Exception:
+        pass
+    return mensajes
+
+def raspar_telegram_masivo():
+    canales = [
+        "DIUkraine", "SBUkr", "informnapalm", "cyberresistanceua",
+        "entre_guerras", "rybar", "dva_majors", "vchkogpu",
+        "meduzalive", "astrapress", "istories_media",
+        "ostorozhno_novosti", "nvua_official", "operativnoZSU",
+        "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu",
+        "ASupersharij"
+    ]
+    todos = []
+    with ThreadPoolExecutor(max_workers=10) as ex:
+        futuros = [ex.submit(raspar_un_canal_tg, c) for c in canales]
+        for f in as_completed(futuros):
+            try:
+                todos.extend(f.result())
+            except Exception:
+                pass
+    return todos
 
 # ==========================================
 # RASTREADORES RUMAFIA Y ANTIKOR
@@ -434,105 +536,6 @@ def raspar_antikor():
     except Exception:
         pass
     return items
-
-# ==========================================
-# RECOLECTOR TELEGRAM
-# ==========================================
-def raspar_un_canal_tg(canal):
-    mensajes = []
-    try:
-        r = SESION_HTTP.get(f"https://t.me/s/{canal}", timeout=6.0)
-        if r.status_code != 200:
-            return []
-        soup = BeautifulSoup(r.text, "html.parser")
-        posts = soup.find_all("div", class_="tgme_widget_message_wrap")
-
-        for p in posts[-35:]:
-            time_tag = p.find("time")
-            dt_obj = datetime.now(timezone.utc)
-            if time_tag and time_tag.get("datetime"):
-                try:
-                    dt_obj = datetime.fromisoformat(time_tag.get("datetime").replace("Z", "+00:00")).astimezone(timezone.utc)
-                except Exception:
-                    pass
-
-            if not es_reciente_24h(dt_obj):
-                continue
-
-            t_div = p.find("div", class_="tgme_widget_message_text")
-            texto_raw = t_div.get_text(separator=" ", strip=True) if t_div else ""
-
-            if len(texto_raw) < 25 or es_publicidad_o_spam(texto_raw):
-                continue
-
-            texto_limpio_eval = re.sub(r'@\w+', '', texto_raw)
-            texto_limpio_eval = re.sub(r'https?://\S+', '', texto_limpio_eval)
-
-            if not tiene_vinculo_ruso_estricto(texto_limpio_eval):
-                continue
-
-            texto_sin_urls = limpiar_html_texto(re.sub(r'http\S+', '', texto_raw))
-            if len(texto_sin_urls) < 20:
-                continue
-
-            foto_url = None
-            tiene_video = False
-
-            for tag_foto in p.find_all("a", class_="tgme_widget_message_photo_wrap"):
-                m = re.search(r"url\(['\"]?(https?://[^'\")]+)['\"]?\)", tag_foto.get("style", ""))
-                if m:
-                    foto_url = m.group(1)
-                    break
-
-            for elem in p.find_all(["i", "div", "a", "video"]):
-                clases = " ".join(elem.get("class", [])) if elem.get("class") else ""
-                if elem.name == "video" or any(v in clases for v in ["video", "roundvideo"]):
-                    tiene_video = True
-                    estilo = elem.get("style", "")
-                    if estilo and not foto_url:
-                        m = re.search(r"url\(['\"]?(https?://[^'\")]+)['\"]?\)", estilo)
-                        if m:
-                            foto_url = m.group(1)
-
-            a_link = p.find("a", class_="tgme_widget_message_date")
-            link = a_link["href"] if a_link and a_link.get("href") else f"https://t.me/s/{canal}"
-
-            primera_frase = re.split(r'(?<=[.!?])\s+', texto_sin_urls)[0]
-            tit_corto = primera_frase if 20 <= len(primera_frase) <= 160 else texto_sin_urls[:140]
-
-            mensajes.append({
-                "id": f"TG-{hash(link)}",
-                "plataforma": "TELEGRAM",
-                "canal": f"@{canal}",
-                "fecha_dt": dt_obj,
-                "titular_raw": tit_corto,
-                "cuerpo_raw": texto_sin_urls[:2200],
-                "multimedia": foto_url,
-                "tiene_video": bool(tiene_video),
-                "enlace": link
-            })
-    except Exception:
-        pass
-    return mensajes
-
-def raspar_telegram_masivo():
-    canales = [
-        "DIUkraine", "SBUkr", "informnapalm", "cyberresistanceua",
-        "entre_guerras", "rybar", "dva_majors", "vchkogpu",
-        "meduzalive", "astrapress", "istories_media",
-        "ostorozhno_novosti", "nvua_official", "operativnoZSU",
-        "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu",
-        "ASupersharij"
-    ]
-    todos = []
-    with ThreadPoolExecutor(max_workers=10) as ex:
-        futuros = [ex.submit(raspar_un_canal_tg, c) for c in canales]
-        for f in as_completed(futuros):
-            try:
-                todos.extend(f.result())
-            except Exception:
-                pass
-    return todos
 
 # ==========================================
 # RECOLECTOR RSS PRENSA
@@ -610,7 +613,7 @@ def barrido_prensa_multilingue():
     return todas
 
 # ==========================================
-# ACTUALIZACIÓN CENTRAL Y CORRELACIÓN
+# ACTUALIZACIÓN CENTRAL
 # ==========================================
 def son_mismo_evento(tit1, tit2):
     t1 = normalizar_texto(limpiar_firma_medio(re.sub(r'\[.*?\]', '', tit1)))
@@ -620,20 +623,20 @@ def son_mismo_evento(tit1, tit2):
     return SequenceMatcher(None, t1[:95], t2[:95]).ratio() > 0.68
 
 def ejecutar_actualizacion_total():
-    with ThreadPoolExecutor(max_workers=5) as ex:
+    with ThreadPoolExecutor(max_workers=4) as ex:
         f_prensa = ex.submit(barrido_prensa_multilingue)
         f_tg = ex.submit(raspar_telegram_masivo)
-        f_redes = ex.submit(barrido_canales_youtube)
+        f_yt = ex.submit(barrido_canales_youtube)
         f_rumafia = ex.submit(raspar_rumafia)
         f_antikor = ex.submit(raspar_antikor)
 
         brutos_prensa = f_prensa.result()
         brutos_tg = f_tg.result()
-        brutos_redes = f_redes.result()
+        brutos_yt = f_yt.result()
         brutos_rumafia = f_rumafia.result()
         brutos_antikor = f_antikor.result()
 
-    todos_brutos = brutos_tg + brutos_redes + brutos_prensa + brutos_rumafia + brutos_antikor
+    todos_brutos = brutos_tg + brutos_yt + brutos_prensa + brutos_rumafia + brutos_antikor
     todos_brutos.sort(key=lambda x: x["fecha_dt"], reverse=True)
 
     pre_unicos = []
@@ -666,13 +669,13 @@ def ejecutar_actualizacion_total():
         cuerpo_intacto = item["cuerpo_raw"]
         plat = item["plataforma"]
 
-        if plat == "TELEGRAM":
+        if plat == "REDES":
+            titular_final = tit_es
+            cat_final = "REDES"
+        elif plat == "TELEGRAM":
             canal_tag = item["canal"].replace("@", "").upper()
             titular_final = f"[{canal_tag}] {tit_es}"
             cat_final = "TELEGRAM"
-        elif plat == "REDES":
-            titular_final = tit_es
-            cat_final = "REDES"
         else:
             titular_final = tit_es
             tit_sin_medio = limpiar_firma_medio(titular_final)
@@ -753,7 +756,7 @@ SECCIONES_INFORME = [
     ("CRIPTO", "SECCIÓN 5: CRIPTOACTIVOS Y FINANCIACIÓN ILÍCITA", "#7c3aed"),
     ("DETENCION", "SECCIÓN 6: DETENCIONES POR ESPIONAJE Y SABOTAJE", "#be123c"),
     ("TELEGRAM", "SECCIÓN 7: TELEGRAM OSINT Y CANALES TÁCTICOS", "#0284c7"),
-    ("REDES", "SECCIÓN 8: REDES SOCIALES OSINT Y ANÁLISIS MULTIMEDIA", "#059669")
+    ("REDES", "SECCIÓN 8: REDES SOCIALES Y ANÁLISIS MULTIMEDIA", "#059669")
 ]
 
 def generar_html_ejecutivo(alertas, solo_48h=False):
@@ -994,7 +997,6 @@ with st.sidebar:
         use_container_width=True
     )
 
-# Filtrado reactivo en memoria
 datos_filtrados = alertas_totales
 
 if busqueda_txt:
