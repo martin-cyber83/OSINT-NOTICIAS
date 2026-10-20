@@ -214,7 +214,8 @@ def tiene_vector_amenaza_estricto(texto):
         "cripto", "crypto", "bitcoin", "btc", "usdt", "tether", "garantex", "sancion", "sanction", "elusion",
         "flota fantasma", "shadow fleet", "cable submarino", "undersea cable", "petrolero",
         "crimen de guerra", "war crime", "corte penal internacional", "icc", "genocidio", "tortura", "pow execution",
-        "detenido", "arrestado", "arrested", "detained", "dron", "uav", "guerra electronica", "jamming", "arson", "incendio provocado"
+        "detenido", "arrestado", "arrested", "detained", "dron", "uav", "guerra electronica", "jamming", "arson", "incendio provocado",
+        "guerra", "ejercito", "militar", "otan", "nato", "frente", "misil", "ataque", "ofensiva", "bombardeo"
     ]
     return any(v in t_norm for v in vectores_latinos)
 
@@ -246,7 +247,7 @@ def es_espana(titular, cuerpo):
 
 def generar_analisis_contexto(categoria, canal=""):
     if canal.replace("@", "") in CANALES_DESINFORMACION_ESP:
-        return "Canal clasificado en la red de propaganda, desinformación e injerencia extranjera (FIMI) vinculada al ecosistema prorruso en español."
+        return "Canal clasificado en la red de propaganda, desinformación e injerencia extranjera (FIMI) vinculada al ecosistema pro-Kremlin en español."
     if categoria == "CRIMENES":
         return "Documentación de crímenes de guerra, ataques a población o infraestructuras civiles e investigaciones judiciales internacionales en el contexto de la agresión rusa."
     if categoria == "EMPRESA":
@@ -333,7 +334,7 @@ def raspar_antikor():
     return items
 
 # ==========================================
-# RECOLECTOR TELEGRAM (FILTRO ESTRICTO 24H)
+# RECOLECTOR TELEGRAM (SOLO RUSIA Y 24 HORAS)
 # ==========================================
 def raspar_un_canal_tg(canal):
     mensajes = []
@@ -344,10 +345,8 @@ def raspar_un_canal_tg(canal):
         soup = BeautifulSoup(r.text, "html.parser")
         posts = soup.find_all("div", class_="tgme_widget_message_wrap")
 
-        es_canal_desinfo = canal in CANALES_DESINFORMACION_ESP
-
         for p in posts[-35:]:
-            # 1. Comprobación estricta de fecha: solo últimas 24 horas
+            # 1. Filtro estricto de fecha: solo últimas 24 horas
             time_tag = p.find("time")
             dt_obj = datetime.now(timezone.utc)
             if time_tag and time_tag.get("datetime"):
@@ -356,21 +355,18 @@ def raspar_un_canal_tg(canal):
                 except Exception:
                     pass
 
-            # Si el mensaje de Telegram tiene más de 24 horas, se descarta directamente
             if not es_reciente_24h(dt_obj):
                 continue
 
-            # 2. Comprobación de texto
+            # 2. Filtro estricto de texto: OBLIGATORIO vínculo ruso para TODOS los canales
             t_div = p.find("div", class_="tgme_widget_message_text")
             texto_raw = t_div.get_text(separator=" ", strip=True) if t_div else ""
 
             if len(texto_raw) < 25 or es_publicidad_o_spam(texto_raw):
                 continue
 
-            # Para canales tácticos generales sigue exigiendo filtro estricto
-            if not es_canal_desinfo:
-                if not (tiene_vinculo_ruso_estricto(texto_raw) and tiene_vector_amenaza_estricto(texto_raw)):
-                    continue
+            if not tiene_vinculo_ruso_estricto(texto_raw):
+                continue
 
             texto_sin_urls = limpiar_html_texto(re.sub(r'http\S+', '', texto_raw))
             if len(texto_sin_urls) < 20:
@@ -423,7 +419,7 @@ def raspar_telegram_masivo():
         "entre_guerras", "rybar", "dva_majors", "vchkogpu",
         "meduzalive", "astrapress", "istories_media",
         "ostorozhno_novosti", "nvua_official", "operativnoZSU",
-        # Red de desinformación en español (últimas 24h)
+        # Red de difusión en español (filtrados a 24h y tema ruso)
         "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu"
     ]
     todos = []
