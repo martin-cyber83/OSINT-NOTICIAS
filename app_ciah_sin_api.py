@@ -291,7 +291,7 @@ def generar_analisis_contexto(categoria, canal=""):
     if canal_clean in CANALES_DESINFORMACION_ESP:
         return "Canal clasificado en la red de propaganda, desinformación e injerencia extranjera (FIMI) vinculada al ecosistema pro-Kremlin."
     if categoria == "REDES":
-        return "Actividad detectada en redes sociales y plataformas abiertas (VKontakte, Reddit, YouTube): monitorización de OSINT y fuentes rusas/ucranianas."
+        return "Monitorización en fuentes abiertas, YouTube y canales especializados en análisis militar y redes sociales sobre el conflicto."
     if categoria == "CRIMENES":
         return "Documentación de crímenes de guerra, ataques a población civil e investigaciones de la Corte Penal Internacional."
     if categoria == "EMPRESA":
@@ -307,52 +307,13 @@ def generar_analisis_contexto(categoria, canal=""):
     return "Actividad vinculada a operaciones híbridas globales del Kremlin: ciberataques, sabotaje o desinformación."
 
 # ==========================================
-# RASTREADOR REDES (REDDIT JSON, YOUTUBE & VK)
+# RASTREADOR YOUTUBE DIRECTO (RSS / ATOM)
 # ==========================================
-def raspar_reddit_json(subreddit_url, etiqueta):
+def raspar_youtube_canal(canal_id, etiqueta):
     items = []
     try:
-        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0.0.0"}
-        r = requests.get(subreddit_url, headers=headers, timeout=6.0)
-        if r.status_code == 200:
-            data = r.json()
-            posts = data.get("data", {}).get("children", [])
-            for post in posts[:15]:
-                pdata = post.get("data", {})
-                tit_orig = limpiar_html_texto(pdata.get("title", ""))
-                cuerpo = limpiar_html_texto(pdata.get("selftext", ""))
-                created_utc = pdata.get("created_utc", 0)
-                dt_obj = datetime.fromtimestamp(created_utc, timezone.utc)
-
-                if not es_reciente_48h(dt_obj):
-                    continue
-
-                texto_eval = f"{tit_orig} {cuerpo}"
-                if not (tiene_vinculo_ruso_estricto(texto_eval) and tiene_vector_amenaza_estricto(texto_eval)):
-                    continue
-
-                permalink = pdata.get("permalink", "")
-                link_final = f"https://www.reddit.com{permalink}" if permalink else pdata.get("url", "")
-
-                items.append({
-                    "id": f"REDDIT-{pdata.get('id', hash(link_final))}",
-                    "plataforma": "REDES",
-                    "canal": etiqueta,
-                    "fecha_dt": dt_obj,
-                    "titular_raw": tit_orig,
-                    "cuerpo_raw": cuerpo if len(cuerpo) > 20 else tit_orig,
-                    "multimedia": pdata.get("thumbnail") if pdata.get("thumbnail", "").startswith("http") else None,
-                    "tiene_video": bool(pdata.get("is_video", False)),
-                    "enlace": link_final
-                })
-    except Exception:
-        pass
-    return items
-
-def raspar_youtube_atom(canal_url, etiqueta):
-    items = []
-    try:
-        r = requests.get(canal_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=6.0)
+        url = f"https://www.youtube.com/feeds/videos.xml?channel_id={canal_id}"
+        r = SESION_HTTP.get(url, timeout=5.0)
         if r.status_code == 200:
             root = ET.fromstring(r.content)
             for entry in root.findall(".//{http://www.w3.org/2005/Atom}entry")[:10]:
@@ -369,13 +330,8 @@ def raspar_youtube_atom(canal_url, etiqueta):
                 except Exception:
                     dt_obj = datetime.now(timezone.utc)
 
-                # Descripción en el bloque de media
                 desc_tag = entry.find(".//{http://search.yahoo.com/mrss/}description")
                 cuerpo = limpiar_html_texto(desc_tag.text if desc_tag is not None else "")
-
-                texto_eval = f"{tit_orig} {cuerpo}"
-                if not tiene_vinculo_ruso_estricto(texto_eval):
-                    continue
 
                 items.append({
                     "id": f"YT-{hash(link)}",
@@ -392,60 +348,16 @@ def raspar_youtube_atom(canal_url, etiqueta):
         pass
     return items
 
-def raspar_un_muro_vk(comunidad_id, etiqueta):
-    items = []
-    try:
-        url = f"https://vk.com/{comunidad_id}"
-        headers_vk = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-            "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8"
-        }
-        r = requests.get(url, headers=headers_vk, timeout=6.0)
-        if r.status_code == 200:
-            soup = BeautifulSoup(r.text, "html.parser")
-            posts = soup.find_all("div", class_="wall_item") or soup.find_all("div", class_="post")
-            for p in posts[:10]:
-                texto_div = p.find("div", class_="wall_post_text") or p.find("div", class_="post_text")
-                texto_raw = texto_div.get_text(separator=" ", strip=True) if texto_div else ""
-
-                if len(texto_raw) < 25 or es_publicidad_o_spam(texto_raw):
-                    continue
-
-                if not (tiene_vinculo_ruso_estricto(texto_raw) and tiene_vector_amenaza_estricto(texto_raw)):
-                    continue
-
-                link_tag = p.find("a", class_="post_link") or p.find("a", class_="wall_item_link")
-                post_href = link_tag.get("href", "") if link_tag else ""
-                link_final = f"https://vk.com{post_href}" if post_href.startswith("/") else (post_href or url)
-
-                primera_frase = re.split(r'(?<=[.!?])\s+', texto_raw)[0]
-                tit_corto = primera_frase if 20 <= len(primera_frase) <= 160 else texto_raw[:140]
-
-                items.append({
-                    "id": f"VK-{hash(link_final)}",
-                    "plataforma": "REDES",
-                    "canal": f"VK: {etiqueta}",
-                    "fecha_dt": datetime.now(timezone.utc),
-                    "titular_raw": tit_corto,
-                    "cuerpo_raw": texto_raw[:1800],
-                    "multimedia": None,
-                    "tiene_video": False,
-                    "enlace": link_final
-                })
-    except Exception:
-        pass
-    return items
-
-def barrido_redes_sociales():
+def barrido_canales_youtube():
+    canales = [
+        ("UCVPYbobPRzz0SjinWekjUBw", "YouTube: Anatolii Sharij"),
+        ("UCP2QApi83fGDJGyZ31yX-pQ", "YouTube: ISW War Studies"),
+        ("UC6n-ikz_s3zP9v9H6a_3tKg", "YouTube: CSIS Strategic Studies")
+    ]
     todas = []
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        f_reddit1 = ex.submit(raspar_reddit_json, "https://www.reddit.com/r/UkrainianConflict/new.json?limit=25", "Reddit: r/UkrainianConflict")
-        f_reddit2 = ex.submit(raspar_reddit_json, "https://www.reddit.com/r/OSINT/new.json?limit=25", "Reddit: r/OSINT")
-        f_yt_sharij = ex.submit(raspar_youtube_atom, "https://www.youtube.com/feeds/videos.xml?channel_id=UCVPYbobPRzz0SjinWekjUBw", "YouTube: Anatolii Sharij")
-        f_yt_isw = ex.submit(raspar_youtube_atom, "https://www.youtube.com/feeds/videos.xml?channel_id=UCP2QApi83fGDJGyZ31yX-pQ", "YouTube: ISW War Studies")
-        f_vk = ex.submit(raspar_un_muro_vk, "milinfolive", "MilInfoLive")
-
-        for f in [f_reddit1, f_reddit2, f_yt_sharij, f_yt_isw, f_vk]:
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        futuros = [ex.submit(raspar_youtube_canal, cid, tag) for cid, tag in canales]
+        for f in as_completed(futuros):
             try:
                 todas.extend(f.result())
             except Exception:
@@ -524,7 +436,7 @@ def raspar_antikor():
     return items
 
 # ==========================================
-# RECOLECTOR TELEGRAM (FILTRO ESTRICTO 24H)
+# RECOLECTOR TELEGRAM
 # ==========================================
 def raspar_un_canal_tg(canal):
     mensajes = []
@@ -711,7 +623,7 @@ def ejecutar_actualizacion_total():
     with ThreadPoolExecutor(max_workers=5) as ex:
         f_prensa = ex.submit(barrido_prensa_multilingue)
         f_tg = ex.submit(raspar_telegram_masivo)
-        f_redes = ex.submit(barrido_redes_sociales)
+        f_redes = ex.submit(barrido_canales_youtube)
         f_rumafia = ex.submit(raspar_rumafia)
         f_antikor = ex.submit(raspar_antikor)
 
@@ -841,7 +753,7 @@ SECCIONES_INFORME = [
     ("CRIPTO", "SECCIÓN 5: CRIPTOACTIVOS Y FINANCIACIÓN ILÍCITA", "#7c3aed"),
     ("DETENCION", "SECCIÓN 6: DETENCIONES POR ESPIONAJE Y SABOTAJE", "#be123c"),
     ("TELEGRAM", "SECCIÓN 7: TELEGRAM OSINT Y CANALES TÁCTICOS", "#0284c7"),
-    ("REDES", "SECCIÓN 8: REDES SOCIALES OSINT (VKONTAKTE / REDDIT / YOUTUBE)", "#059669")
+    ("REDES", "SECCIÓN 8: REDES SOCIALES OSINT Y ANÁLISIS MULTIMEDIA", "#059669")
 ]
 
 def generar_html_ejecutivo(alertas, solo_48h=False):
@@ -1129,7 +1041,6 @@ with col_info:
     if "ultima_actualizacion" in st.session_state:
         st.markdown(f'<div style="font-size:12.5px;color:#94a3b8;margin-top:6px;">🕒 <strong>Última sincronización:</strong> {st.session_state.ultima_actualizacion}<br>Mostrando <strong>{len(datos_activos)}</strong> alertas filtradas.</div>', unsafe_allow_html=True)
 
-# Controles rápidos de marcado
 ids_visibles = [x["id"] for x in datos_activos]
 c_sel1, c_sel2, _ = st.columns([1.2, 1.2, 4.0])
 
