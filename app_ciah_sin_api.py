@@ -60,7 +60,7 @@ def es_reciente_24h(fecha_dt):
         fecha_dt = fecha_dt.replace(tzinfo=timezone.utc)
     ahora = datetime.now(timezone.utc)
     diferencia = ahora - fecha_dt.astimezone(timezone.utc)
-    return timedelta(hours=-24) <= diferencia <= timedelta(hours=24)
+    return timedelta(seconds=0) <= diferencia <= timedelta(hours=24)
 
 def es_reciente_48h(fecha_dt):
     if not fecha_dt:
@@ -69,7 +69,7 @@ def es_reciente_48h(fecha_dt):
         fecha_dt = fecha_dt.replace(tzinfo=timezone.utc)
     ahora = datetime.now(timezone.utc)
     diferencia = ahora - fecha_dt.astimezone(timezone.utc)
-    return timedelta(hours=-24) <= diferencia <= timedelta(hours=48)
+    return timedelta(seconds=0) <= diferencia <= timedelta(hours=48)
 
 # ==========================================
 # DESCODIFICACIÓN OFFLINE DE GOOGLE NEWS
@@ -160,19 +160,33 @@ EMPRESAS_ESTRATEGICAS_ESP = [
     "repsol", "naturgy", "redeia", "red electrica", "enagas", "talgo"
 ]
 
-ACTORES_RUSIA_ESTRICTOS = [
-    "rusia", "ruso", "rusa", "rusos", "rusas", "moscu", "kremlin", "putin",
-    "russia", "russian", "moscow", "russie", "russe", "moscou", "russland", "russisch", "moskau",
-    "gru", "fsb", "svr", "apt28", "apt29", "fancy bear", "cozy bear", "sandworm",
-    "noname057", "killnet", "turla", "gamaredon", "cyberarmyofrussia", "garantex", "wagner",
-    "bielorrusia", "belarus", "kaliningrad", "lukashenko",
-    "ucrania", "ukraine", "ukrainian", "kiev", "kyiv", "donbas", "crimea", "bucha", "mariupol",
-    "kursk", "belgorod", "zaporiyia", "zaporizhzhia", "kherson", "donetsk", "jarkov", "kharkiv", "odesa"
-]
-
 CANALES_DESINFORMACION_ESP = {
     "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu"
 }
+
+# TÉRMINOS 100% RUSOS / CONFLICTO RUSO (Regex con límite de palabra)
+PATRON_RUSIA_ESTRICTO = re.compile(
+    r'\b('
+    r'rusia|ruso|rusa|rusos|rusas|moscu|kremlin|putin|mod rf|fuerzas armadas rusas|'
+    r'russia|russian|russians|moscow|russie|russe|russland|russisch|'
+    r'gru|fsb|svr|apt28|apt29|fancy bear|cozy bear|sandworm|noname057|killnet|turla|gamaredon|cyberarmyofrussia|garantex|wagner|'
+    r'bielorrusia|belarus|kaliningrado|kaliningrad|lukashenko|'
+    r'ucrania|ucraniano|ucraniana|ucranianos|ukraine|ukrainian|kiev|kyiv|zelensky|zelenski|zsu|vsu|sbu|gur|'
+    r'kursk|belgorod|donbas|donbass|crimea|zaporiyia|zaporizhzhia|kherson|donetsk|lugansk|luhansk|jarkov|kharkiv'
+    r')\b', re.IGNORECASE
+)
+
+RAICES_CIRILICO_RUSIA = [
+    "росси", "рф", "москв", "кремл", "путин", "гру", "фсб", "свр",
+    "украин", "киев", "київ", "зсу", "всу", "сбу", "гур", "донбасс",
+    "крым", "беларус", "вагнер", "шахед", "геран", "искандер"
+]
+
+# TEMAS AJENOS QUE SE DESCARTAN SI NO TIENEN VÍNCULO DIRECTO CON RUSIA
+PATRON_TEMAS_AJENOS = re.compile(
+    r'\b(gaza|hamas|hezbollah|hezbola|netanyahu|tel aviv|cisjordania|palestina|palestino|israel|israeli|yemen|huti|huties|sudan)\b',
+    re.IGNORECASE
+)
 
 def es_publicidad_o_spam(texto):
     t = normalizar_texto(texto)
@@ -185,15 +199,18 @@ def tiene_vinculo_ruso_estricto(texto):
     t_raw = str(texto).lower()
     t_norm = normalizar_texto(texto)
 
-    raices_cirilico = [
-        "росси", "рф", "москв", "кремл", "путин", "гру", "фсб", "свр",
-        "украин", "киев", "київ", "зсу", "всу", "сбу", "гур", "донбасс",
-        "крым", "беларус", "вагнер", "шахед", "геран", "искандер"
-    ]
-    if any(c in t_raw for c in raices_cirilico):
+    # 1. Si es cirílico y contiene raíces rusas/ucranianas
+    if any(c in t_raw for c in RAICES_CIRILICO_RUSIA):
         return True
 
-    return any(r in t_norm for r in ACTORES_RUSIA_ESTRICTOS)
+    # 2. Descarte de temas de Oriente Medio/conflictos ajenos si no mencionan a Rusia
+    es_tema_ajeno = bool(PATRON_TEMAS_AJENOS.search(t_norm))
+    hay_rusia_directo = bool(re.search(r'\b(rusia|ruso|rusa|moscu|kremlin|putin|russia|moscow)\b', t_norm))
+    if es_tema_ajeno and not hay_rusia_directo:
+        return False
+
+    # 3. Comprobación estricta por palabra completa
+    return bool(PATRON_RUSIA_ESTRICTO.search(t_norm))
 
 def tiene_vector_amenaza_estricto(texto):
     t_raw = str(texto).lower()
@@ -283,7 +300,7 @@ def raspar_rumafia():
                     dt = datetime.now(timezone.utc)
 
                 texto_eval = f"{tit} {desc}"
-                if len(tit) > 10 and tiene_vector_amenaza_estricto(texto_eval):
+                if len(tit) > 10 and tiene_vinculo_ruso_estricto(texto_eval) and tiene_vector_amenaza_estricto(texto_eval):
                     items.append({
                         "id": f"RUMAFIA-{hash(link)}",
                         "plataforma": "INVESTIGACIÓN",
@@ -334,7 +351,7 @@ def raspar_antikor():
     return items
 
 # ==========================================
-# RECOLECTOR TELEGRAM (SOLO RUSIA Y 24 HORAS)
+# RECOLECTOR TELEGRAM (SOLO RUSIA Y 24H)
 # ==========================================
 def raspar_un_canal_tg(canal):
     mensajes = []
@@ -358,13 +375,14 @@ def raspar_un_canal_tg(canal):
             if not es_reciente_24h(dt_obj):
                 continue
 
-            # 2. Filtro estricto de texto: OBLIGATORIO vínculo ruso para TODOS los canales
+            # 2. Filtro estricto de texto: OBLIGATORIO vínculo ruso
             t_div = p.find("div", class_="tgme_widget_message_text")
             texto_raw = t_div.get_text(separator=" ", strip=True) if t_div else ""
 
             if len(texto_raw) < 25 or es_publicidad_o_spam(texto_raw):
                 continue
 
+            # FILTRO CRÍTICO: Debe ser sobre Rusia/conflicto ruso
             if not tiene_vinculo_ruso_estricto(texto_raw):
                 continue
 
@@ -419,7 +437,7 @@ def raspar_telegram_masivo():
         "entre_guerras", "rybar", "dva_majors", "vchkogpu",
         "meduzalive", "astrapress", "istories_media",
         "ostorozhno_novosti", "nvua_official", "operativnoZSU",
-        # Red de difusión en español (filtrados a 24h y tema ruso)
+        # Red de difusión en español (filtrados con exclusión estricta)
         "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu"
     ]
     todos = []
