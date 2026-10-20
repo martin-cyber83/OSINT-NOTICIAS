@@ -173,14 +173,14 @@ PATRON_RUSIA_ESTRICTO = re.compile(
     r'gru|fsb|svr|apt28|apt29|fancy bear|cozy bear|sandworm|noname057|killnet|turla|gamaredon|cyberarmyofrussia|garantex|wagner|'
     r'bielorrusia|belarus|kaliningrado|kaliningrad|lukashenko|'
     r'ucrania|ucraniano|ucraniana|ucranianos|ukraine|ukrainian|zelensky|zelenski|zsu|vsu|sbu|gur|'
-    r'kursk|belgorod|donbas|donbass|crimea|zaporiyia|zaporizhzhia|kherson|donetsk|lugansk|luhansk|jarkov|kharkiv'
+    r'kursk|belgorod|donbas|donbass|crimea|zaporiyia|zaporizhzhia|kherson|donetsk|lugansk|luhansk|jarkov|kharkiv|sharii|shariy|шарий'
     r')\b', re.IGNORECASE
 )
 
 RAICES_CIRILICO_RUSIA = [
     "росси", "рф", "москв", "кремл", "путин", "гру", "фсб", "свр",
     "украин", "киев", "київ", "зсу", "всу", "сбу", "гур", "донбасс",
-    "крым", "беларус", "вагнер", "шахед", "геран", "искандер"
+    "крым", "беларус", "вагнер", "шахед", "геран", "искандер", "шарий"
 ]
 
 PATRON_PAISES_AJENOS = re.compile(
@@ -208,7 +208,7 @@ def tiene_vinculo_ruso_estricto(texto):
         return True
 
     if PATRON_PAISES_AJENOS.search(t_norm):
-        if not re.search(r'\b(kremlin|putin|tropas rusas|fuerzas armadas rusas|moscu|espionaje ruso|invasion rusa)\b', t_norm):
+        if not re.search(r'\b(kremlin|putin|tropas rusas|fuerzas armadas rusas|moscu|espionaje ruso|invasion rusa|sharii|shariy)\b', t_norm):
             return False
 
     return bool(PATRON_RUSIA_ESTRICTO.search(t_norm))
@@ -287,6 +287,8 @@ def calcular_puntuacion_severidad(categoria, titular, cuerpo):
     return score
 
 def generar_analisis_contexto(categoria, canal=""):
+    if "Sharij" in canal or "Sharii" in canal or "ASupersharij" in canal:
+        return "Canal de Anatolii Sharij: seguimiento de narrativas de influencia política, críticas y propaganda sobre Ucrania y Europa."
     if canal.replace("@", "") in CANALES_DESINFORMACION_ESP:
         return "Canal clasificado en la red de propaganda, desinformación e injerencia extranjera (FIMI) vinculada al ecosistema pro-Kremlin en español."
     if categoria == "REDES":
@@ -311,46 +313,43 @@ def generar_analisis_contexto(categoria, canal=""):
 def raspar_un_muro_vk(comunidad_id, etiqueta):
     items = []
     try:
-        url = f"https://vk.com/{comunidad_id}"
+        url = f"https://m.vk.com/{comunidad_id}"
         headers_vk = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-            "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.8"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         }
-        r = requests.get(url, headers=headers_vk, timeout=6.0)
-        if r.status_code != 200:
-            return []
+        r = requests.get(url, headers=headers_vk, timeout=5.0)
+        if r.status_code == 200:
+            soup = BeautifulSoup(r.text, "html.parser")
+            posts = soup.find_all("div", class_="wall_item")
 
-        soup = BeautifulSoup(r.text, "html.parser")
-        posts = soup.find_all("div", class_="wall_item") or soup.find_all("div", class_="post")
+            for p in posts[:12]:
+                t_div = p.find("div", class_="pi_text") or p.find("div", class_="wall_post_text")
+                texto_raw = t_div.get_text(separator=" ", strip=True) if t_div else ""
 
-        for p in posts[:15]:
-            texto_div = p.find("div", class_="wall_post_text") or p.find("div", class_="post_text")
-            texto_raw = texto_div.get_text(separator=" ", strip=True) if texto_div else ""
+                if len(texto_raw) < 25 or es_publicidad_o_spam(texto_raw):
+                    continue
 
-            if len(texto_raw) < 30 or es_publicidad_o_spam(texto_raw):
-                continue
+                if not (tiene_vinculo_ruso_estricto(texto_raw) and tiene_vector_amenaza_estricto(texto_raw)):
+                    continue
 
-            if not (tiene_vinculo_ruso_estricto(texto_raw) and tiene_vector_amenaza_estricto(texto_raw)):
-                continue
+                a_link = p.find("a", class_="pi_date") or p.find("a", class_="item_date")
+                link_href = a_link["href"] if a_link and a_link.get("href") else f"/{comunidad_id}"
+                link_final = f"https://vk.com{link_href}" if link_href.startswith("/") else link_href
 
-            link_tag = p.find("a", class_="post_link") or p.find("a", class_="wall_item_link")
-            post_href = link_tag.get("href", "") if link_tag else ""
-            link_final = f"https://vk.com{post_href}" if post_href.startswith("/") else (post_href or url)
+                primera_frase = re.split(r'(?<=[.!?])\s+', texto_raw)[0]
+                tit_corto = primera_frase if 20 <= len(primera_frase) <= 160 else texto_raw[:140]
 
-            primera_frase = re.split(r'(?<=[.!?])\s+', texto_raw)[0]
-            tit_corto = primera_frase if 20 <= len(primera_frase) <= 160 else texto_raw[:140]
-
-            items.append({
-                "id": f"VK-{hash(link_final)}",
-                "plataforma": "REDES",
-                "canal": f"VK: {etiqueta}",
-                "fecha_dt": datetime.now(timezone.utc),
-                "titular_raw": tit_corto,
-                "cuerpo_raw": texto_raw[:1800],
-                "multimedia": None,
-                "tiene_video": False,
-                "enlace": link_final
-            })
+                items.append({
+                    "id": f"VK-{hash(link_final)}",
+                    "plataforma": "REDES",
+                    "canal": f"VK: {etiqueta}",
+                    "fecha_dt": datetime.now(timezone.utc),
+                    "titular_raw": tit_corto,
+                    "cuerpo_raw": texto_raw[:1800],
+                    "multimedia": None,
+                    "tiene_video": False,
+                    "enlace": link_final
+                })
     except Exception:
         pass
     return items
@@ -358,8 +357,8 @@ def raspar_un_muro_vk(comunidad_id, etiqueta):
 def barrido_vkontakte():
     comunidades = [
         ("milinfolive", "MilInfoLive"),
-        ("rt_russian", "RT en Ruso"),
-        ("tassagency", "TASS Oficial")
+        ("rt_russian", "RT Noticias"),
+        ("tassagency", "TASS")
     ]
     todas = []
     with ThreadPoolExecutor(max_workers=3) as ex:
@@ -372,92 +371,109 @@ def barrido_vkontakte():
     return todas
 
 # ==========================================
-# RASTREADOR REDES (REDDIT Y YOUTUBE)
+# RASTREADOR REDES (REDDIT JSON Y YOUTUBE)
 # ==========================================
-def raspar_un_feed_redes(datos_red):
-    url, etiqueta = datos_red
+def raspar_reddit_json(sub, etiqueta):
     items = []
     try:
-        # Cabecera específica para que Reddit no bloquee la petición
+        url = f"https://www.reddit.com/r/{sub}/new.json?limit=25"
         headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) OSINT-Intel-Bot/2.0 (compatible)",
-            "Accept": "application/atom+xml,application/xml,text/xml;q=0.9,*/*;q=0.8"
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
         }
-        r = requests.get(url, headers=headers, timeout=6.0)
-        if r.status_code != 200:
-            return []
+        r = requests.get(url, headers=headers, timeout=5.0)
+        if r.status_code == 200:
+            data = r.json()
+            posts = data.get("data", {}).get("children", [])
+            for p in posts:
+                d = p.get("data", {})
+                tit = limpiar_html_texto(d.get("title", ""))
+                cuerpo = limpiar_html_texto(d.get("selftext", ""))
+                created_utc = d.get("created_utc", 0)
+                dt_obj = datetime.fromtimestamp(created_utc, timezone.utc)
 
-        root = ET.fromstring(r.content)
-        entradas = root.findall(".//{http://www.w3.org/2005/Atom}entry") or root.findall(".//entry")
-        if not entradas:
-            entradas = root.findall(".//item")
+                if not es_reciente_48h(dt_obj):
+                    continue
 
-        for entry in entradas[:20]:
-            tit_tag = entry.find("{http://www.w3.org/2005/Atom}title") or entry.find("title")
-            tit_orig = limpiar_html_texto(tit_tag.text if tit_tag is not None else "")
+                texto_eval = f"{tit} {cuerpo}"
+                if not (tiene_vinculo_ruso_estricto(texto_eval) and tiene_vector_amenaza_estricto(texto_eval)):
+                    continue
 
-            desc_tag = entry.find("{http://www.w3.org/2005/Atom}content") or entry.find("{http://www.w3.org/2005/Atom}summary") or entry.find("description")
-            desc_orig = desc_tag.text if desc_tag is not None else ""
-            cuerpo_crudo = limpiar_html_texto(desc_orig)[:1400]
+                enlace = f"https://www.reddit.com{d.get('permalink', '')}"
 
-            link = ""
-            link_tag = entry.find("{http://www.w3.org/2005/Atom}link")
-            if link_tag is not None:
-                link = link_tag.get("href", "")
-            if not link:
-                link_tag2 = entry.find("link")
-                link = link_tag2.text if link_tag2 is not None else ""
+                items.append({
+                    "id": f"RED-{hash(enlace)}",
+                    "plataforma": "REDES",
+                    "canal": f"Reddit: r/{sub}",
+                    "fecha_dt": dt_obj,
+                    "titular_raw": tit,
+                    "cuerpo_raw": cuerpo if len(cuerpo) > 20 else tit,
+                    "multimedia": None,
+                    "tiene_video": False,
+                    "enlace": enlace
+                })
+    except Exception:
+        pass
+    return items
 
-            pub_tag = entry.find("{http://www.w3.org/2005/Atom}updated") or entry.find("{http://www.w3.org/2005/Atom}published") or entry.find("pubDate")
-            pub_str = pub_tag.text if pub_tag is not None else ""
-            try:
-                dt_obj = parsedate_to_datetime(pub_str).astimezone(timezone.utc)
-            except Exception:
+def raspar_youtube_canal(channel_id, etiqueta):
+    items = []
+    try:
+        url = f"https://www.youtube.com/feeds/videos.xml?channel_id={channel_id}"
+        r = SESION_HTTP.get(url, timeout=5.0)
+        if r.status_code == 200:
+            root = ET.fromstring(r.content)
+            for entry in root.findall(".//{http://www.w3.org/2005/Atom}entry")[:10]:
+                tit_tag = entry.find("{http://www.w3.org/2005/Atom}title")
+                tit_orig = limpiar_html_texto(tit_tag.text if tit_tag is not None else "")
+
+                link_tag = entry.find("{http://www.w3.org/2005/Atom}link")
+                link = link_tag.get("href", "") if link_tag is not None else ""
+
+                pub_tag = entry.find("{http://www.w3.org/2005/Atom}published")
+                pub_str = pub_tag.text if pub_tag is not None else ""
                 try:
                     dt_obj = datetime.fromisoformat(pub_str.replace("Z", "+00:00")).astimezone(timezone.utc)
                 except Exception:
                     dt_obj = datetime.now(timezone.utc)
 
-            texto_eval = f"{tit_orig} {cuerpo_crudo}"
-            if not tiene_vinculo_ruso_estricto(texto_eval) or not tiene_vector_amenaza_estricto(texto_eval):
-                continue
+                texto_eval = tit_orig
+                # En canales rusos/ucranianos dedicados como Anatolii Sharij o ISW aceptamos sus publicaciones recientes
+                if not ("Sharij" in etiqueta or "ISW" in etiqueta):
+                    if not (tiene_vinculo_ruso_estricto(texto_eval) and tiene_vector_amenaza_estricto(texto_eval)):
+                        continue
 
-            es_yt = "youtube.com" in url or "YouTube" in etiqueta
-
-            items.append({
-                "id": f"RED-{hash(link)}",
-                "plataforma": "REDES",
-                "canal": etiqueta,
-                "fecha_dt": dt_obj,
-                "titular_raw": tit_orig,
-                "cuerpo_raw": cuerpo_crudo if len(cuerpo_crudo) > 20 else tit_orig,
-                "multimedia": None,
-                "tiene_video": es_yt,
-                "enlace": link
-            })
+                items.append({
+                    "id": f"YT-{hash(link)}",
+                    "plataforma": "REDES",
+                    "canal": etiqueta,
+                    "fecha_dt": dt_obj,
+                    "titular_raw": tit_orig,
+                    "cuerpo_raw": f"Vídeo publicado en el canal oficial de {etiqueta}: {tit_orig}",
+                    "multimedia": None,
+                    "tiene_video": True,
+                    "enlace": link
+                })
     except Exception:
         pass
     return items
 
 def barrido_redes_sociales():
-    fuentes_redes = [
-        ("https://www.reddit.com/r/UkrainianConflict/new/.rss", "Reddit: r/UkrainianConflict"),
-        ("https://www.reddit.com/r/OSINT/new/.rss", "Reddit: r/OSINT"),
-        ("https://www.reddit.com/r/WarCollege/new/.rss", "Reddit: r/WarCollege"),
-        ("https://www.youtube.com/feeds/videos.xml?channel_id=UCP2QApi83fGDJGyZ31yX-pQ", "YouTube: ISW (Institute Study War)"),
-        ("https://www.youtube.com/feeds/videos.xml?channel_id=UC6n-ikz_s3zP9v9H6a_3tKg", "YouTube: CSIS Strategic Studies")
-    ]
     todas = []
-    with ThreadPoolExecutor(max_workers=5) as ex:
-        futuros = [ex.submit(raspar_un_feed_redes, f) for f in fuentes_redes]
-        for f in as_completed(futuros):
-            try:
-                todas.extend(f.result())
-            except Exception:
-                pass
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        f_reddit1 = ex.submit(raspar_reddit_json, "UkrainianConflict", "UkrainianConflict")
+        f_reddit2 = ex.submit(raspar_reddit_json, "OSINT", "OSINT")
+        f_reddit3 = ex.submit(raspar_reddit_json, "WarCollege", "WarCollege")
+        # YouTube: Anatolii Sharij, ISW y CSIS
+        f_yt_sharij = ex.submit(raspar_youtube_canal, "UCVPYbobPRzz0SjinWekjUBw", "YouTube: Anatolii Sharij")
+        f_yt_isw = ex.submit(raspar_youtube_canal, "UCP2QApi83fGDJGyZ31yX-pQ", "YouTube: ISW")
+        f_vk = ex.submit(barrido_vkontakte)
 
-    # Sumar las publicaciones obtenidas de VKontakte
-    todas.extend(barrido_vkontakte())
+        todas.extend(f_reddit1.result())
+        todas.extend(f_reddit2.result())
+        todas.extend(f_reddit3.result())
+        todas.extend(f_yt_sharij.result())
+        todas.extend(f_yt_isw.result())
+        todas.extend(f_vk.result())
     return todas
 
 # ==========================================
@@ -564,8 +580,10 @@ def raspar_un_canal_tg(canal):
             texto_limpio_eval = re.sub(r'@\w+', '', texto_raw)
             texto_limpio_eval = re.sub(r'https?://\S+', '', texto_limpio_eval)
 
-            if not tiene_vinculo_ruso_estricto(texto_limpio_eval):
-                continue
+            # Para Anatolii Sharij (@ASupersharij) admitimos sus mensajes recientes directamente
+            if canal != "ASupersharij":
+                if not tiene_vinculo_ruso_estricto(texto_limpio_eval):
+                    continue
 
             texto_sin_urls = limpiar_html_texto(re.sub(r'http\S+', '', texto_raw))
             if len(texto_sin_urls) < 20:
@@ -613,11 +631,15 @@ def raspar_un_canal_tg(canal):
 
 def raspar_telegram_masivo():
     canales = [
+        # Canales militares y tácticos OSINT
         "DIUkraine", "SBUkr", "informnapalm", "cyberresistanceua",
         "entre_guerras", "rybar", "dva_majors", "vchkogpu",
         "meduzalive", "astrapress", "istories_media",
         "ostorozhno_novosti", "nvua_official", "operativnoZSU",
-        "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu"
+        # Red de propaganda en español
+        "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu",
+        # Canal oficial de Anatolii Sharij
+        "ASupersharij"
     ]
     todos = []
     with ThreadPoolExecutor(max_workers=10) as ex:
@@ -1053,10 +1075,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 logo_svg = """<svg width="64" height="64" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><defs><radialGradient id="grad" cx="50%" cy="50%" r="50%"><stop offset="0%" style="stop-color:#1e293b;stop-opacity:1" /><stop offset="100%" style="stop-color:#0b0f19;stop-opacity:1" /></radialGradient></defs><circle cx="50" cy="50" r="48" fill="url(#grad)" stroke="#dc2626" stroke-width="3.5" /><circle cx="50" cy="50" r="38" fill="none" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="4,3" /><path d="M50 20 L73 31 V54 C73 69 50 81 50 81 C50 81 27 69 27 54 V31 Z" fill="#0f172a" stroke="#ffffff" stroke-width="2" /><polygon points="51,29 41,48 49,48 46,68 59,45 51,45" fill="#dc2626" /></svg>"""
-st.markdown(f'<div class="header-box"><div>{logo_svg}</div><div class="header-text"><h1>ANALIZADOR DE AMENAZAS HÍBRIDAS</h1><p>Monitor táctico de fuentes abiertas e inteligencia operativa</p></div></div>', unsafe_allow_html=True)
+st.markdown(f'<div class="header-box"><div>{logo_svg}</div><div class="header-text"><h1>ANALIZADOR DE AMENAZAS HÍBRIDAS</h1><p>Buscador de fuentes abiertas de amenazas desestabilizadoras</p></div></div>', unsafe_allow_html=True)
 
 if "arranque_inicial_ok" not in st.session_state:
-    with st.spinner("Conectando con fuentes OSINT, VK y redes..."):
+    with st.spinner("Buscando en fuentes..."):
         ejecutar_actualizacion_total()
     st.session_state.arranque_inicial_ok = True
     st.rerun()
@@ -1110,13 +1132,13 @@ if nivel_severidad_min > 1:
 col_btn1, col_btn2, col_filtro, col_info = st.columns([1.2, 1.4, 1.1, 1.5])
 
 with col_btn1:
-    if st.button("🔄 ACTUALIZAR FUENTES", type="primary", use_container_width=True):
-        with st.spinner("Actualizando inteligencia..."):
+    if st.button("🔄 ACTUALIZAR BÚSQUEDA", type="primary", use_container_width=True):
+        with st.spinner("Buscando en fuentes..."):
             ejecutar_actualizacion_total()
         st.rerun()
 
 with col_filtro:
-    solo_48h = st.checkbox("🔥 Solo Últimas 48h", value=False)
+    solo_48h = st.checkbox("🔥 Solo Relevantes (Últimas 48h)", value=False)
 
 datos_activos = [x for x in datos_filtrados if es_reciente_48h(x.get("fecha_dt"))] if solo_48h else datos_filtrados
 alertas_para_informe = [x for x in datos_activos if x.get("id") in st.session_state.seleccionadas_pdf]
@@ -1124,7 +1146,7 @@ alertas_para_informe = [x for x in datos_activos if x.get("id") in st.session_st
 with col_btn2:
     if "alertas_monitor" in st.session_state:
         st.download_button(
-            f"📥 INFORME EJECUTIVO ({len(alertas_para_informe)}/{len(datos_activos)})",
+            f"📥 DESCARGAR INFORME ({len(alertas_para_informe)}/{len(datos_activos)})",
             data=generar_html_ejecutivo(alertas_para_informe, solo_48h=solo_48h),
             file_name=f"Informe_Amenazas_{'48h_' if solo_48h else 'general_'}{datetime.now().strftime('%Y%m%d_%H%M')}.html",
             mime="text/html",
@@ -1133,7 +1155,7 @@ with col_btn2:
 
 with col_info:
     if "ultima_actualizacion" in st.session_state:
-        st.markdown(f'<div style="font-size:12.5px;color:#94a3b8;margin-top:6px;">🕒 <strong>Última sincronización:</strong> {st.session_state.ultima_actualizacion}<br>Mostrando <strong>{len(datos_activos)}</strong> alertas filtradas.</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:12.5px;color:#94a3b8;margin-top:6px;">🕒 <strong>Actualizado:</strong> {st.session_state.ultima_actualizacion}<br>Mostrando <strong>{len(datos_activos)}</strong> alertas filtradas.</div>', unsafe_allow_html=True)
 
 ids_visibles = [x["id"] for x in datos_activos]
 c_sel1, c_sel2, _ = st.columns([1.2, 1.2, 4.0])
@@ -1200,7 +1222,7 @@ def renderizar_tarjetas(lista_items):
             f'<div style="margin-bottom:8px;">{badges}<span style="font-size:12px;color:#64748b;margin-left:10px;">📅 {fecha_str} UTC | 📢 {canal_safe}</span></div>'
             f'<div class="osint-title">{t_safe}</div>'
             f'{bloque_reporte}'
-            f'<div class="osint-analisis"><strong>🧠 Análisis:</strong> {a_safe}</div>'
+            f'<div class="osint-analisis"><strong>🧠 Evaluación:</strong> {a_safe}</div>'
             f'<div style="display:flex;gap:10px;align-items:center;">'
             f'<a href="{enlace}" target="_blank" class="btn-source">🔗 ABRIR FUENTE ORIGINAL</a>'
             f'{vid_html}'
