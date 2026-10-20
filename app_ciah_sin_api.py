@@ -161,6 +161,10 @@ ACTORES_RUSIA_ESTRICTOS = [
     "kursk", "belgorod", "zaporiyia", "zaporizhzhia", "kherson", "donetsk", "jarkov", "kharkiv", "odesa"
 ]
 
+CANALES_DESINFORMACION_ESP = {
+    "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu"
+}
+
 def es_publicidad_o_spam(texto):
     t = normalizar_texto(texto)
     spam = ["master profesional", "lisa institute", "udima", "beca", "matriculate", "curso online", "descuento", "sorteo", "casino", "apuestas", "tarot", "horoscopo", "oferta de empleo"]
@@ -197,11 +201,12 @@ def tiene_vector_amenaza_estricto(texto):
     vectores_latinos = [
         "hibrid", "hybrid", "sabotaj", "sabotage", "saboteador", "espia", "espionaje", "spy", "espionage", "spying",
         "ciber", "cyber", "hack", "ddos", "malware", "ransomware", "apt28", "apt29", "sandworm", "noname057", "killnet",
-        "desinformacion", "disinformation", "propaganda", "injerencia",
+        "desinformacion", "disinformation", "propaganda", "injerencia", "narrativa", "fimi", "fake", "manipulacion",
         "cripto", "crypto", "bitcoin", "btc", "usdt", "tether", "garantex", "sancion", "sanction", "elusion",
         "flota fantasma", "shadow fleet", "cable submarino", "undersea cable", "petrolero",
         "crimen de guerra", "war crime", "corte penal internacional", "icc", "genocidio", "tortura", "pow execution",
-        "detenido", "arrestado", "arrested", "detained", "dron", "uav", "guerra electronica", "jamming", "arson", "incendio provocado"
+        "detenido", "arrestado", "arrested", "detained", "dron", "uav", "guerra electronica", "jamming", "arson", "incendio provocado",
+        "otan", "nato", "frente", "misil", "ataque", "ofensiva", "bombardeo"
     ]
     return any(v in t_norm for v in vectores_latinos)
 
@@ -232,6 +237,8 @@ def es_espana(titular, cuerpo):
     return bool(re.search(patron, t_all))
 
 def generar_analisis_contexto(categoria):
+    if categoria == "DESINFORMACION":
+        return "Operación de Información e Injerencia Extranjera (FIMI): Narrativa de propaganda, desinformación o guerra cognitiva en español vinculada al ecosistema pro-Kremlin."
     if categoria == "CRIMENES":
         return "Documentación de crímenes de guerra, ataques a población o infraestructuras civiles e investigaciones judiciales internacionales en el contexto de la agresión rusa."
     if categoria == "EMPRESA":
@@ -329,6 +336,8 @@ def raspar_un_canal_tg(canal):
         soup = BeautifulSoup(r.text, "html.parser")
         posts = soup.find_all("div", class_="tgme_widget_message_wrap")
 
+        es_canal_desinfo = canal in CANALES_DESINFORMACION_ESP
+
         for p in posts[-30:]:
             t_div = p.find("div", class_="tgme_widget_message_text")
             texto_raw = t_div.get_text(separator=" ", strip=True) if t_div else ""
@@ -336,8 +345,13 @@ def raspar_un_canal_tg(canal):
             if len(texto_raw) < 25 or es_publicidad_o_spam(texto_raw):
                 continue
 
-            if not (tiene_vinculo_ruso_estricto(texto_raw) and tiene_vector_amenaza_estricto(texto_raw)):
-                continue
+            # Para canales de la red de desinformación en español, relajamos el filtro de vínculo si tratan sobre la guerra o política exterior
+            if not es_canal_desinfo:
+                if not (tiene_vinculo_ruso_estricto(texto_raw) and tiene_vector_amenaza_estricto(texto_raw)):
+                    continue
+            else:
+                if not (tiene_vector_amenaza_estricto(texto_raw) or tiene_vinculo_ruso_estricto(texto_raw)):
+                    continue
 
             texto_sin_urls = limpiar_html_texto(re.sub(r'http\S+', '', texto_raw))
             if len(texto_sin_urls) < 20:
@@ -380,6 +394,7 @@ def raspar_un_canal_tg(canal):
                 "id": f"TG-{hash(link)}",
                 "plataforma": "TELEGRAM",
                 "canal": f"@{canal}",
+                "canal_puro": canal,
                 "fecha_dt": dt_obj,
                 "titular_raw": tit_corto,
                 "cuerpo_raw": texto_sin_urls[:2200],
@@ -393,10 +408,13 @@ def raspar_un_canal_tg(canal):
 
 def raspar_telegram_masivo():
     canales = [
+        # Canales OSINT y Militares
         "DIUkraine", "SBUkr", "informnapalm", "cyberresistanceua",
         "entre_guerras", "rybar", "dva_majors", "vchkogpu",
         "meduzalive", "astrapress", "istories_media",
-        "ostorozhno_novosti", "nvua_official", "operativnoZSU"
+        "ostorozhno_novosti", "nvua_official", "operativnoZSU",
+        # Red de Desinformación y Guerra Cognitiva en Español
+        "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu"
     ]
     todos = []
     with ThreadPoolExecutor(max_workers=10) as ex:
@@ -446,6 +464,7 @@ def procesar_un_feed_rss(datos_feed):
                 "id": f"RSS-{hash(link)}",
                 "plataforma": "PRENSA",
                 "canal": etiqueta,
+                "canal_puro": "",
                 "fecha_dt": dt_obj,
                 "titular_raw": tit_orig,
                 "cuerpo_raw": cuerpo_crudo,
@@ -530,11 +549,17 @@ def ejecutar_actualizacion_total():
     alertas_finales = []
     for item, tit_es in zip(pre_unicos, titulares_traducidos):
         cuerpo_intacto = item["cuerpo_raw"]
+        canal_puro = item.get("canal_puro", "")
 
         if item["plataforma"] == "TELEGRAM":
             canal_tag = item["canal"].replace("@", "").upper()
             titular_final = f"[{canal_tag}] {tit_es}"
-            cat_final = "TELEGRAM"
+            
+            # Clasificación hacia Desinformación / Guerra Cognitiva
+            if canal_puro in CANALES_DESINFORMACION_ESP:
+                cat_final = "DESINFORMACION"
+            else:
+                cat_final = "TELEGRAM"
         else:
             titular_final = tit_es
             tit_sin_medio = limpiar_firma_medio(titular_final)
@@ -580,11 +605,12 @@ def ejecutar_actualizacion_total():
 SECCIONES_INFORME = [
     ("ESPANA", "SECCIÓN 1: ESPAÑA E INFRAESTRUCTURAS CRÍTICAS", "#dc2626"),
     ("EMPRESA", "SECCIÓN 2: EMPRESAS ESTRATÉGICAS DE ESPAÑA Y DEFENSA", "#d97706"),
-    ("GLOBAL", "SECCIÓN 3: RUSIA, UCRANIA Y AMENAZAS GLOBALES", "#0f172a"),
-    ("CRIMENES", "SECCIÓN 4: CRÍMENES DE GUERRA Y DERECHOS HUMANOS", "#991b1b"),
-    ("CRIPTO", "SECCIÓN 5: CRIPTOACTIVOS Y FINANCIACIÓN ILÍCITA", "#7c3aed"),
-    ("DETENCION", "SECCIÓN 6: DETENCIONES POR ESPIONAJE Y SABOTAJE", "#be123c"),
-    ("TELEGRAM", "SECCIÓN 7: TELEGRAM OSINT Y CANALES TÁCTICOS", "#0284c7")
+    ("DESINFORMACION", "SECCIÓN 3: GUERRA COGNITIVA, FIMI Y DESINFORMACIÓN", "#e11d48"),
+    ("GLOBAL", "SECCIÓN 4: RUSIA, UCRANIA Y AMENAZAS GLOBALES", "#0f172a"),
+    ("CRIMENES", "SECCIÓN 5: CRÍMENES DE GUERRA Y DERECHOS HUMANOS", "#991b1b"),
+    ("CRIPTO", "SECCIÓN 6: CRIPTOACTIVOS Y FINANCIACIÓN ILÍCITA", "#7c3aed"),
+    ("DETENCION", "SECCIÓN 7: DETENCIONES POR ESPIONAJE Y SABOTAJE", "#be123c"),
+    ("TELEGRAM", "SECCIÓN 8: TELEGRAM OSINT Y CANALES TÁCTICOS", "#0284c7")
 ]
 
 def generar_html_ejecutivo(alertas, solo_48h=False):
@@ -861,7 +887,7 @@ def generar_html_ejecutivo(alertas, solo_48h=False):
             badge_relevante = '<span class="tag-relevante">🔥 RELEVANTE (48H)</span>' if es_reciente_48h(a.get("fecha_dt")) else ""
             vid_txt = " | 🎥 Vídeo" if a.get("tiene_video") else ""
             
-            cuerpo_html = f'<div class="cuerpo-box"><strong>📄 Reporte Telegram:</strong> {hecho}</div>' if a.get("categoria") == "TELEGRAM" else ""
+            cuerpo_html = f'<div class="cuerpo-box"><strong>📄 Reporte Telegram:</strong> {hecho}</div>' if a.get("categoria") in ["TELEGRAM", "DESINFORMACION"] else ""
 
             html += f"""
             <div class="card" style="border-left-color: {cat_color};">
@@ -906,9 +932,9 @@ st.markdown("""
     .header-text p { color: #cbd5e1; font-size: 16px !important; margin: 6px 0 0 0; }
 
     button[data-baseweb="tab"] {
-        font-size: 13px !important;
+        font-size: 12.5px !important;
         font-weight: 800 !important;
-        padding: 10px 14px !important;
+        padding: 10px 12px !important;
         margin: 0 4px 10px 0 !important;
         border-radius: 8px !important;
         color: #ffffff !important;
@@ -917,11 +943,12 @@ st.markdown("""
     }
     button[data-baseweb="tab"]:nth-child(1) { background-color: #dc2626 !important; }
     button[data-baseweb="tab"]:nth-child(2) { background-color: #d97706 !important; }
-    button[data-baseweb="tab"]:nth-child(3) { background-color: #1e293b !important; }
-    button[data-baseweb="tab"]:nth-child(4) { background-color: #991b1b !important; }
-    button[data-baseweb="tab"]:nth-child(5) { background-color: #7c3aed !important; }
-    button[data-baseweb="tab"]:nth-child(6) { background-color: #be123c !important; }
-    button[data-baseweb="tab"]:nth-child(7) { background-color: #0284c7 !important; }
+    button[data-baseweb="tab"]:nth-child(3) { background-color: #e11d48 !important; }
+    button[data-baseweb="tab"]:nth-child(4) { background-color: #1e293b !important; }
+    button[data-baseweb="tab"]:nth-child(5) { background-color: #991b1b !important; }
+    button[data-baseweb="tab"]:nth-child(6) { background-color: #7c3aed !important; }
+    button[data-baseweb="tab"]:nth-child(7) { background-color: #be123c !important; }
+    button[data-baseweb="tab"]:nth-child(8) { background-color: #0284c7 !important; }
 
     button[data-baseweb="tab"][aria-selected="true"] {
         border: 2px solid #ffffff !important;
@@ -1009,7 +1036,7 @@ with col_filtro:
 alertas_totales = st.session_state.get("alertas_monitor", [])
 datos_activos = [x for x in alertas_totales if es_reciente_48h(x.get("fecha_dt"))] if solo_48h else alertas_totales
 
-# Filtro dinámico: solo van al informe las alertas marcadas
+# Noticias seleccionadas para el informe
 alertas_para_informe = [x for x in datos_activos if x.get("id") in st.session_state.seleccionadas_pdf]
 
 with col_btn2:
@@ -1028,7 +1055,7 @@ with col_info:
         total_total = len(alertas_totales)
         st.markdown(f'<div class="update-timestamp">🕒 <strong>Actualizado:</strong> {st.session_state.ultima_actualizacion} &nbsp;|&nbsp; 🔥 <strong>Últimas 48h:</strong> {total_48h} de {total_total}</div>', unsafe_allow_html=True)
 
-# Botones rápidos de control
+# Botones rápidos de marcado y desmarcado
 c_sel1, c_sel2, _ = st.columns([1.2, 1.2, 4.0])
 with c_sel1:
     if st.button("✅ Seleccionar todas", use_container_width=True):
@@ -1051,6 +1078,7 @@ def renderizar_tarjetas(lista_items):
         b_color = {
             "ESPANA": "#dc2626",
             "EMPRESA": "#d97706",
+            "DESINFORMACION": "#e11d48",
             "GLOBAL": "#0f172a",
             "CRIMENES": "#991b1b",
             "CRIPTO": "#7c3aed",
@@ -1065,6 +1093,7 @@ def renderizar_tarjetas(lista_items):
         bg_c, txt_c, label_c = {
             "ESPANA": ('#fee2e2', '#991b1b', '🇪🇸 ESPAÑA'),
             "EMPRESA": ('#fef3c7', '#92400e', '🏢 EMPRESA ESTRATÉGICA'),
+            "DESINFORMACION": ('#ffe4e6', '#be123c', '📢 DESINFORMACIÓN / FIMI'),
             "GLOBAL": ('#e2e8f0', '#1e293b', '🌐 GLOBAL / INTERNACIONAL'),
             "CRIMENES": ('#fecaca', '#7f1d1d', '⚖️ CRÍMENES DE GUERRA'),
             "CRIPTO": ('#f3e8ff', '#6b21a8', '🟣 CRIPTO / FININT'),
@@ -1087,7 +1116,7 @@ def renderizar_tarjetas(lista_items):
         media_html = f'<div class="osint-media"><img src="{html_module.escape(item.get("multimedia"))}" alt="Evidencia" loading="lazy" /></div>' if item.get("multimedia") and es_url_segura(item.get("multimedia")) else ""
         vid_html = f'<a href="{html_module.escape(enlace)}" target="_blank" class="btn-video">▶️ VER VÍDEO EN TELEGRAM</a>' if item.get("tiene_video") else ""
 
-        bloque_reporte = f'<div class="osint-resumen" translate="yes"><strong>📄 Mensaje Original Telegram:</strong><br>{h_safe}</div>' if cat == "TELEGRAM" else ""
+        bloque_reporte = f'<div class="osint-resumen" translate="yes"><strong>📄 Mensaje Original Telegram:</strong><br>{h_safe}</div>' if cat in ["TELEGRAM", "DESINFORMACION"] else ""
 
         tarjeta_html = (
             f'<div class="osint-card" style="border-left: 9px solid {b_color};" translate="yes">'
@@ -1122,15 +1151,17 @@ def renderizar_tarjetas(lista_items):
 if "alertas_monitor" in st.session_state:
     l_esp = [x for x in datos_activos if x.get("categoria") == "ESPANA"]
     l_emp = [x for x in datos_activos if x.get("categoria") == "EMPRESA"]
+    l_desinfo = [x for x in datos_activos if x.get("categoria") == "DESINFORMACION"]
     l_prensa = [x for x in datos_activos if x.get("categoria") == "GLOBAL"]
     l_crim = [x for x in datos_activos if x.get("categoria") == "CRIMENES"]
     l_cripto = [x for x in datos_activos if x.get("categoria") == "CRIPTO"]
     l_det = [x for x in datos_activos if x.get("categoria") == "DETENCION"]
     l_tg = [x for x in datos_activos if x.get("categoria") == "TELEGRAM"]
 
-    t1, t2, t3, t4, t5, t6, t7 = st.tabs([
+    t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([
         f"🇪🇸 ESPAÑA ({len(l_esp)})",
         f"🏢 EMPRESAS ({len(l_emp)})",
+        f"📢 DESINFORMACIÓN ({len(l_desinfo)})",
         f"📰 GLOBAL ({len(l_prensa)})",
         f"⚖️ CRÍMENES GUERRA ({len(l_crim)})",
         f"🟣 CRIPTO ({len(l_cripto)})",
@@ -1142,12 +1173,14 @@ if "alertas_monitor" in st.session_state:
     with t2:
         renderizar_tarjetas(l_emp)
     with t3:
-        renderizar_tarjetas(l_prensa)
+        renderizar_tarjetas(l_desinfo)
     with t4:
-        renderizar_tarjetas(l_crim)
+        renderizar_tarjetas(l_prensa)
     with t5:
-        renderizar_tarjetas(l_cripto)
+        renderizar_tarjetas(l_crim)
     with t6:
-        renderizar_tarjetas(l_det)
+        renderizar_tarjetas(l_cripto)
     with t7:
+        renderizar_tarjetas(l_det)
+    with t8:
         renderizar_tarjetas(l_tg)
