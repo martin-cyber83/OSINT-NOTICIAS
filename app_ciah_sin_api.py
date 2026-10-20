@@ -53,6 +53,15 @@ def limpiar_url(url):
 def es_url_segura(url):
     return str(url).startswith("http://") or str(url).startswith("https://")
 
+def es_reciente_24h(fecha_dt):
+    if not fecha_dt:
+        return False
+    if fecha_dt.tzinfo is None:
+        fecha_dt = fecha_dt.replace(tzinfo=timezone.utc)
+    ahora = datetime.now(timezone.utc)
+    diferencia = ahora - fecha_dt.astimezone(timezone.utc)
+    return timedelta(hours=-24) <= diferencia <= timedelta(hours=24)
+
 def es_reciente_48h(fecha_dt):
     if not fecha_dt:
         return False
@@ -324,7 +333,7 @@ def raspar_antikor():
     return items
 
 # ==========================================
-# RECOLECTOR TELEGRAM
+# RECOLECTOR TELEGRAM (FILTRO ESTRICTO 24H)
 # ==========================================
 def raspar_un_canal_tg(canal):
     mensajes = []
@@ -337,22 +346,8 @@ def raspar_un_canal_tg(canal):
 
         es_canal_desinfo = canal in CANALES_DESINFORMACION_ESP
 
-        for p in posts[-30:]:
-            t_div = p.find("div", class_="tgme_widget_message_text")
-            texto_raw = t_div.get_text(separator=" ", strip=True) if t_div else ""
-
-            if len(texto_raw) < 25 or es_publicidad_o_spam(texto_raw):
-                continue
-
-            # Si es un canal de la red de desinformación rusa entra TODO; si es táctico general exige filtro estricto
-            if not es_canal_desinfo:
-                if not (tiene_vinculo_ruso_estricto(texto_raw) and tiene_vector_amenaza_estricto(texto_raw)):
-                    continue
-
-            texto_sin_urls = limpiar_html_texto(re.sub(r'http\S+', '', texto_raw))
-            if len(texto_sin_urls) < 20:
-                continue
-
+        for p in posts[-35:]:
+            # 1. Comprobación estricta de fecha: solo últimas 24 horas
             time_tag = p.find("time")
             dt_obj = datetime.now(timezone.utc)
             if time_tag and time_tag.get("datetime"):
@@ -360,6 +355,26 @@ def raspar_un_canal_tg(canal):
                     dt_obj = datetime.fromisoformat(time_tag.get("datetime").replace("Z", "+00:00")).astimezone(timezone.utc)
                 except Exception:
                     pass
+
+            # Si el mensaje de Telegram tiene más de 24 horas, se descarta directamente
+            if not es_reciente_24h(dt_obj):
+                continue
+
+            # 2. Comprobación de texto
+            t_div = p.find("div", class_="tgme_widget_message_text")
+            texto_raw = t_div.get_text(separator=" ", strip=True) if t_div else ""
+
+            if len(texto_raw) < 25 or es_publicidad_o_spam(texto_raw):
+                continue
+
+            # Para canales tácticos generales sigue exigiendo filtro estricto
+            if not es_canal_desinfo:
+                if not (tiene_vinculo_ruso_estricto(texto_raw) and tiene_vector_amenaza_estricto(texto_raw)):
+                    continue
+
+            texto_sin_urls = limpiar_html_texto(re.sub(r'http\S+', '', texto_raw))
+            if len(texto_sin_urls) < 20:
+                continue
 
             foto_url = None
             tiene_video = False
@@ -408,7 +423,7 @@ def raspar_telegram_masivo():
         "entre_guerras", "rybar", "dva_majors", "vchkogpu",
         "meduzalive", "astrapress", "istories_media",
         "ostorozhno_novosti", "nvua_official", "operativnoZSU",
-        # Red de desinformación en español (captura total)
+        # Red de desinformación en español (últimas 24h)
         "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu"
     ]
     todos = []
