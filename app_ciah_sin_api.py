@@ -151,7 +151,7 @@ def extraer_resumen_rss(tit_orig, desc_rss):
     return limpio[:1800] if len(limpio) > 25 else limpiar_firma_medio(tit_orig)
 
 # ==========================================
-# DICCIONARIOS Y EVALUACIÓN DE SEVERIDAD
+# DICCIONARIOS Y FILTROS ESTRICTOS
 # ==========================================
 EMPRESAS_ESTRATEGICAS_ESP = [
     "indra", "grupo oesia", "oesia", "uav navigation", "tecnobit", "navantia",
@@ -264,27 +264,23 @@ def es_espana(titular, cuerpo):
     return bool(re.search(patron, t_all))
 
 def calcular_puntuacion_severidad(categoria, titular, cuerpo):
-    """Calcula un puntaje del 1 al 5 en función del impacto táctico u operativo."""
     t_all = normalizar_texto(f"{titular} {cuerpo}")
-    score = 2  # Nivel base
+    score = 2
 
-    if categoria == "ESPANA" or categoria == "EMPRESA":
+    if categoria in ["ESPANA", "EMPRESA"]:
         score = 4
         if re.search(r'\b(sabotaje|ciberataque|infiltrado|infraestructura critica|red electrica|cni|defensa)\b', t_all):
             score = 5
-    elif categoria == "DETENCION":
-        score = 4
-    elif categoria == "CRIMENES":
+    elif categoria in ["DETENCION", "CRIMENES"]:
         score = 4
     elif categoria == "CRIPTO":
         score = 3
-    elif categoria == "TELEGRAM":
+    elif categoria in ["TELEGRAM", "REDES"]:
         if re.search(r'\b(ofensiva|misil|nuclear|sabotaje|bpla|shahed|dron|frente)\b', t_all):
             score = 3
         else:
             score = 2
 
-    # Vector crítico de sabotaje submarino o infraestructuras OTAN
     if re.search(r'\b(cable submarino|flota fantasma|nord stream|otan|baltico)\b', t_all):
         score = max(score, 4)
 
@@ -293,19 +289,114 @@ def calcular_puntuacion_severidad(categoria, titular, cuerpo):
 def generar_analisis_contexto(categoria, canal=""):
     if canal.replace("@", "") in CANALES_DESINFORMACION_ESP:
         return "Canal clasificado en la red de propaganda, desinformación e injerencia extranjera (FIMI) vinculada al ecosistema pro-Kremlin en español."
+    if categoria == "REDES":
+        return "Actividad detectada en foros abiertos y redes sociales (Reddit/YouTube): discusión OSINT y difusión multimedia sobre el conflicto ruso."
     if categoria == "CRIMENES":
-        return "Documentación de crímenes de guerra, ataques a población o infraestructuras civiles e investigaciones judiciales internacionales en el contexto de la agresión rusa."
+        return "Documentación de crímenes de guerra, ataques a población civil e investigaciones de la Corte Penal Internacional."
     if categoria == "EMPRESA":
-        return "Seguimiento sobre empresas estratégicas de España (Defensa, Aeroespacial, Energía y Telecomunicaciones) ante ciberataques, sabotajes o señalamiento hostil ruso."
+        return "Seguimiento sobre empresas estratégicas de España (Defensa, Energía y Telecomunicaciones) ante ciberataques o sabotajes."
     if categoria == "ESPANA":
-        return "Impacto directo en la seguridad nacional, ciberespacio o infraestructuras críticas de España frente a operaciones híbridas y de desestabilización vinculadas al Kremlin."
+        return "Impacto directo en la seguridad nacional e infraestructuras críticas de España frente a operaciones hostiles."
     if categoria == "CRIPTO":
-        return "Inteligencia financiera (FININT): evasión de sanciones internacionales y empleo de criptoactivos (USDT, BTC) para financiación encubierta o plataformas sin regulación."
+        return "Inteligencia financiera (FININT): evasión de sanciones internacionales y uso de criptoactivos (USDT, BTC)."
     if categoria == "DETENCION":
-        return "Operaciones de contrainteligencia y policiales frente a redes de espionaje del GRU/FSB/SVR, células de sabotaje o agentes encubiertos."
+        return "Operaciones policiales y contrainteligencia frente a redes del GRU/FSB/SVR o agentes de sabotaje."
     if categoria == "TELEGRAM":
-        return "Reporte capturado de canales tácticos y de difusión en Telegram: inteligencia operativa y sobre el terreno de la zona de conflicto."
-    return "Actividad vinculada a operaciones híbridas globales del Kremlin: ciberataques, guerra electrónica, sabotaje, flota fantasma o desinformación."
+        return "Reporte capturado de canales tácticos en Telegram: inteligencia operativa de primera línea."
+    return "Actividad vinculada a operaciones híbridas globales del Kremlin: ciberataques, sabotaje o desinformación."
+
+# ==========================================
+# RASTREADORES REDES SOCIALES (REDDIT Y YOUTUBE)
+# ==========================================
+def raspar_un_feed_redes(datos_red):
+    url, etiqueta = datos_red
+    items = []
+    try:
+        r = SESION_HTTP.get(url, timeout=6.0)
+        if r.status_code != 200:
+            return []
+
+        # Soporte para feeds Atom (Reddit/YouTube)
+        root = ET.fromstring(r.content)
+        entradas = root.findall(".//{http://www.w3.org/2005/Atom}entry") or root.findall(".//entry")
+        
+        # Si viene en formato RSS estándar
+        if not entradas:
+            entradas = root.findall(".//item")
+
+        for entry in entradas[:20]:
+            tit_tag = entry.find("{http://www.w3.org/2005/Atom}title") or entry.find("title")
+            tit_orig = limpiar_html_texto(tit_tag.text if tit_tag is not None else "")
+
+            # Contenido / Resumen
+            desc_tag = entry.find("{http://www.w3.org/2005/Atom}content") or entry.find("{http://www.w3.org/2005/Atom}summary") or entry.find("description")
+            desc_orig = desc_tag.text if desc_tag is not None else ""
+            cuerpo_crudo = limpiar_html_texto(desc_orig)[:1400]
+
+            # Enlace
+            link = ""
+            link_tag = entry.find("{http://www.w3.org/2005/Atom}link")
+            if link_tag is not None:
+                link = link_tag.get("href", "")
+            if not link:
+                link_tag2 = entry.find("link")
+                link = link_tag2.text if link_tag2 is not None else ""
+
+            # Fecha
+            pub_tag = entry.find("{http://www.w3.org/2005/Atom}updated") or entry.find("{http://www.w3.org/2005/Atom}published") or entry.find("pubDate")
+            pub_str = pub_tag.text if pub_tag is not None else ""
+            try:
+                dt_obj = parsedate_to_datetime(pub_str).astimezone(timezone.utc)
+            except Exception:
+                try:
+                    dt_obj = datetime.fromisoformat(pub_str.replace("Z", "+00:00")).astimezone(timezone.utc)
+                except Exception:
+                    dt_obj = datetime.now(timezone.utc)
+
+            # Filtro de 48 horas para redes
+            if not es_reciente_48h(dt_obj):
+                continue
+
+            texto_eval = f"{tit_orig} {cuerpo_crudo}"
+            if not tiene_vinculo_ruso_estricto(texto_eval) or not tiene_vector_amenaza_estricto(texto_eval):
+                continue
+
+            es_yt = "youtube.com" in url or "YouTube" in etiqueta
+
+            items.append({
+                "id": f"RED-{hash(link)}",
+                "plataforma": "REDES",
+                "canal": etiqueta,
+                "fecha_dt": dt_obj,
+                "titular_raw": tit_orig,
+                "cuerpo_raw": cuerpo_crudo if len(cuerpo_crudo) > 20 else tit_orig,
+                "multimedia": None,
+                "tiene_video": es_yt,
+                "enlace": link
+            })
+    except Exception:
+        pass
+    return items
+
+def barrido_redes_sociales():
+    fuentes_redes = [
+        # Reddit OSINT y Conflicto
+        ("https://www.reddit.com/r/UkrainianConflict/new/.rss", "Reddit: r/UkrainianConflict"),
+        ("https://www.reddit.com/r/OSINT/new/.rss", "Reddit: r/OSINT"),
+        ("https://www.reddit.com/r/WarCollege/new/.rss", "Reddit: r/WarCollege"),
+        # YouTube Canales de Análisis Estratégico (RSS nativos)
+        ("https://www.youtube.com/feeds/videos.xml?channel_id=UCP2QApi83fGDJGyZ31yX-pQ", "YouTube: ISW (Institute Study War)"),
+        ("https://www.youtube.com/feeds/videos.xml?channel_id=UC6n-ikz_s3zP9v9H6a_3tKg", "YouTube: CSIS Strategic Studies")
+    ]
+    todas = []
+    with ThreadPoolExecutor(max_workers=5) as ex:
+        futuros = [ex.submit(raspar_un_feed_redes, f) for f in fuentes_redes]
+        for f in as_completed(futuros):
+            try:
+                todas.extend(f.result())
+            except Exception:
+                pass
+    return todas
 
 # ==========================================
 # RASTREADORES RUMAFIA Y ANTIKOR
@@ -562,21 +653,22 @@ def son_mismo_evento(tit1, tit2):
     return SequenceMatcher(None, t1[:95], t2[:95]).ratio() > 0.68
 
 def ejecutar_actualizacion_total():
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=5) as ex:
         f_prensa = ex.submit(barrido_prensa_multilingue)
         f_tg = ex.submit(raspar_telegram_masivo)
+        f_redes = ex.submit(barrido_redes_sociales)
         f_rumafia = ex.submit(raspar_rumafia)
         f_antikor = ex.submit(raspar_antikor)
 
         brutos_prensa = f_prensa.result()
         brutos_tg = f_tg.result()
+        brutos_redes = f_redes.result()
         brutos_rumafia = f_rumafia.result()
         brutos_antikor = f_antikor.result()
 
-    todos_brutos = brutos_tg + brutos_prensa + brutos_rumafia + brutos_antikor
+    todos_brutos = brutos_tg + brutos_redes + brutos_prensa + brutos_rumafia + brutos_antikor
     todos_brutos.sort(key=lambda x: x["fecha_dt"], reverse=True)
 
-    # Correlación cruzada de eventos repetidos
     pre_unicos = []
     urls_vistas = set()
     for b in todos_brutos:
@@ -584,7 +676,6 @@ def ejecutar_actualizacion_total():
         if u in urls_vistas:
             continue
         
-        # Si ya existe un evento idéntico, registramos la fuente adicional sin duplicar la alerta
         coincidente = next((ex for ex in pre_unicos if son_mismo_evento(b["titular_raw"], ex["titular_raw"])), None)
         if coincidente:
             if b["canal"] not in coincidente.get("canales_correlacionados", []):
@@ -606,11 +697,15 @@ def ejecutar_actualizacion_total():
     alertas_finales = []
     for item, tit_es in zip(pre_unicos, titulares_traducidos):
         cuerpo_intacto = item["cuerpo_raw"]
+        plat = item["plataforma"]
 
-        if item["plataforma"] == "TELEGRAM":
+        if plat == "TELEGRAM":
             canal_tag = item["canal"].replace("@", "").upper()
             titular_final = f"[{canal_tag}] {tit_es}"
             cat_final = "TELEGRAM"
+        elif plat == "REDES":
+            titular_final = tit_es
+            cat_final = "REDES"
         else:
             titular_final = tit_es
             tit_sin_medio = limpiar_firma_medio(titular_final)
@@ -632,7 +727,7 @@ def ejecutar_actualizacion_total():
 
         nueva_alerta = {
             "id": item["id"],
-            "plataforma": item["plataforma"],
+            "plataforma": plat,
             "canal": item["canal"],
             "canales_correlacionados": item.get("canales_correlacionados", [item["canal"]]),
             "fecha_dt": item["fecha_dt"],
@@ -649,7 +744,6 @@ def ejecutar_actualizacion_total():
 
         alertas_finales.append(nueva_alerta)
 
-    # Ordenar por Severidad descendente y luego por Fecha
     alertas_finales.sort(key=lambda x: (x["severidad"], x["fecha_dt"]), reverse=True)
 
     st.session_state.alertas_monitor = alertas_finales
@@ -670,6 +764,7 @@ def exportar_alertas_csv(alertas):
             "Fecha (UTC)": a["fecha_dt"].strftime("%Y-%m-%d %H:%M"),
             "Severidad (1-5)": a["severidad"],
             "Categoría": a["categoria"],
+            "Plataforma": a.get("plataforma", ""),
             "Canal/Fuente": a["canal"],
             "Difusión Cruzada": ", ".join(a.get("canales_correlacionados", [])),
             "Titular": a["titular"],
@@ -687,10 +782,11 @@ SECCIONES_INFORME = [
     ("ESPANA", "SECCIÓN 1: ESPAÑA E INFRAESTRUCTURAS CRÍTICAS", "#dc2626"),
     ("EMPRESA", "SECCIÓN 2: EMPRESAS ESTRATÉGICAS DE ESPAÑA Y DEFENSA", "#d97706"),
     ("GLOBAL", "SECCIÓN 3: RUSIA, UCRANIA Y AMENAZAS GLOBALES", "#0f172a"),
-    ("CRIMENES", "SECCIÓN 4: CRÍMENES DE GUERRA Y DERECHOS HUMANOS", "#991b1b"),
-    ("CRIPTO", "SECCIÓN 5: CRIPTOACTIVOS Y FINANCIACIÓN ILÍCITA", "#7c3aed"),
-    ("DETENCION", "SECCIÓN 6: DETENCIONES POR ESPIONAJE Y SABOTAJE", "#be123c"),
-    ("TELEGRAM", "SECCIÓN 7: TELEGRAM OSINT Y CANALES TÁCTICOS", "#0284c7")
+    ("REDES", "SECCIÓN 4: REDES SOCIALES OSINT (REDDIT / YOUTUBE)", "#059669"),
+    ("CRIMENES", "SECCIÓN 5: CRÍMENES DE GUERRA Y DERECHOS HUMANOS", "#991b1b"),
+    ("CRIPTO", "SECCIÓN 6: CRIPTOACTIVOS Y FINANCIACIÓN ILÍCITA", "#7c3aed"),
+    ("DETENCION", "SECCIÓN 7: DETENCIONES POR ESPIONAJE Y SABOTAJE", "#be123c"),
+    ("TELEGRAM", "SECCIÓN 8: TELEGRAM OSINT Y CANALES TÁCTICOS", "#0284c7")
 ]
 
 def generar_html_ejecutivo(alertas, solo_48h=False):
@@ -784,7 +880,7 @@ def generar_html_ejecutivo(alertas, solo_48h=False):
             enlace = html_module.escape(str(a.get('enlace', '#')))
             sev = a.get('severidad', 2)
 
-            cuerpo_html = f'<div class="cuerpo-box"><strong>Reporte:</strong> {hecho}</div>' if a.get("categoria") == "TELEGRAM" else ""
+            cuerpo_html = f'<div class="cuerpo-box"><strong>Reporte:</strong> {hecho}</div>' if a.get("categoria") in ["TELEGRAM", "REDES"] else ""
 
             html += f"""
             <div class="card" style="border-left-color: {cat_color};">
@@ -845,7 +941,7 @@ st.markdown("""
     .header-text p { color: #cbd5e1; font-size: 15px !important; margin: 4px 0 0 0; }
 
     button[data-baseweb="tab"] {
-        font-size: 13px !important; font-weight: 800 !important;
+        font-size: 12.5px !important; font-weight: 800 !important;
         padding: 9px 12px !important; margin: 0 4px 10px 0 !important;
         border-radius: 8px !important; color: #ffffff !important;
         text-transform: uppercase;
@@ -853,10 +949,11 @@ st.markdown("""
     button[data-baseweb="tab"]:nth-child(1) { background-color: #dc2626 !important; }
     button[data-baseweb="tab"]:nth-child(2) { background-color: #d97706 !important; }
     button[data-baseweb="tab"]:nth-child(3) { background-color: #1e293b !important; }
-    button[data-baseweb="tab"]:nth-child(4) { background-color: #991b1b !important; }
-    button[data-baseweb="tab"]:nth-child(5) { background-color: #7c3aed !important; }
-    button[data-baseweb="tab"]:nth-child(6) { background-color: #be123c !important; }
-    button[data-baseweb="tab"]:nth-child(7) { background-color: #0284c7 !important; }
+    button[data-baseweb="tab"]:nth-child(4) { background-color: #059669 !important; }
+    button[data-baseweb="tab"]:nth-child(5) { background-color: #991b1b !important; }
+    button[data-baseweb="tab"]:nth-child(6) { background-color: #7c3aed !important; }
+    button[data-baseweb="tab"]:nth-child(7) { background-color: #be123c !important; }
+    button[data-baseweb="tab"]:nth-child(8) { background-color: #0284c7 !important; }
 
     button[data-baseweb="tab"][aria-selected="true"] {
         border: 2px solid #ffffff !important;
@@ -897,7 +994,7 @@ logo_svg = """<svg width="64" height="64" viewBox="0 0 100 100" xmlns="http://ww
 st.markdown(f'<div class="header-box"><div>{logo_svg}</div><div class="header-text"><h1>ANALIZADOR DE AMENAZAS HÍBRIDAS</h1><p>Monitor táctico de fuentes abiertas e inteligencia operativa</p></div></div>', unsafe_allow_html=True)
 
 if "arranque_inicial_ok" not in st.session_state:
-    with st.spinner("Conectando con fuentes OSINT..."):
+    with st.spinner("Conectando con fuentes OSINT y redes..."):
         ejecutar_actualizacion_total()
     st.session_state.arranque_inicial_ok = True
     st.rerun()
@@ -908,7 +1005,7 @@ if "seleccionadas_pdf" not in st.session_state:
 alertas_totales = st.session_state.get("alertas_monitor", [])
 
 # ==========================================
-# BARRA LATERAL (FILTROS Y BÚSQUEDA AVANZADA)
+# BARRA LATERAL (FILTROS Y BÚSQUEDA)
 # ==========================================
 with st.sidebar:
     st.subheader("🔍 Filtros de Búsqueda")
@@ -1005,11 +1102,10 @@ def renderizar_tarjetas(lista_items):
 
         b_color = {
             "ESPANA": "#dc2626", "EMPRESA": "#d97706", "GLOBAL": "#0f172a",
-            "CRIMENES": "#991b1b", "CRIPTO": "#7c3aed", "DETENCION": "#be123c",
-            "TELEGRAM": "#0284c7"
+            "REDES": "#059669", "CRIMENES": "#991b1b", "CRIPTO": "#7c3aed",
+            "DETENCION": "#be123c", "TELEGRAM": "#0284c7"
         }.get(cat, "#0f172a")
 
-        # Color de la etiqueta de severidad
         sev_color = "#dc2626" if sev >= 4 else ("#d97706" if sev == 3 else "#475569")
 
         badges = f'<span class="badge-item" style="background:{sev_color};color:#ffffff;">SEVERIDAD {sev}/5</span>'
@@ -1033,9 +1129,9 @@ def renderizar_tarjetas(lista_items):
             enlace = "#"
 
         media_html = f'<div class="osint-media"><img src="{html_module.escape(item.get("multimedia"))}" alt="Evidencia" loading="lazy" /></div>' if item.get("multimedia") and es_url_segura(item.get("multimedia")) else ""
-        vid_html = f'<a href="{html_module.escape(enlace)}" target="_blank" class="btn-video">▶️ VER VÍDEO EN TELEGRAM</a>' if item.get("tiene_video") else ""
+        vid_html = f'<a href="{html_module.escape(enlace)}" target="_blank" class="btn-video">▶️ VER CONTENIDO MULTIMEDIA</a>' if item.get("tiene_video") else ""
 
-        bloque_reporte = f'<div class="osint-resumen"><strong>📄 Reporte Telegram:</strong><br>{h_safe}</div>' if cat == "TELEGRAM" else ""
+        bloque_reporte = f'<div class="osint-resumen"><strong>📄 Reporte Detallado:</strong><br>{h_safe}</div>' if cat in ["TELEGRAM", "REDES"] else ""
 
         tarjeta_html = (
             f'<div class="osint-card" style="border-left: 8px solid {b_color};">'
@@ -1069,21 +1165,23 @@ def renderizar_tarjetas(lista_items):
             st.markdown(tarjeta_html, unsafe_allow_html=True)
 
 # ==========================================
-# PESTAÑAS PRINCIPALES
+# PESTAÑAS PRINCIPALES (8 SECCIONES)
 # ==========================================
 if "alertas_monitor" in st.session_state:
     l_esp = [x for x in datos_activos if x.get("categoria") == "ESPANA"]
     l_emp = [x for x in datos_activos if x.get("categoria") == "EMPRESA"]
     l_prensa = [x for x in datos_activos if x.get("categoria") == "GLOBAL"]
+    l_redes = [x for x in datos_activos if x.get("categoria") == "REDES"]
     l_crim = [x for x in datos_activos if x.get("categoria") == "CRIMENES"]
     l_cripto = [x for x in datos_activos if x.get("categoria") == "CRIPTO"]
     l_det = [x for x in datos_activos if x.get("categoria") == "DETENCION"]
     l_tg = [x for x in datos_activos if x.get("categoria") == "TELEGRAM"]
 
-    t1, t2, t3, t4, t5, t6, t7 = st.tabs([
+    t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([
         f"🇪🇸 ESPAÑA ({len(l_esp)})",
         f"🏢 EMPRESAS ({len(l_emp)})",
         f"📰 GLOBAL ({len(l_prensa)})",
+        f"🌐 REDES SOCIALES ({len(l_redes)})",
         f"⚖️ CRÍMENES GUERRA ({len(l_crim)})",
         f"🟣 CRIPTO ({len(l_cripto)})",
         f"🛑 DETENCIONES ({len(l_det)})",
@@ -1096,10 +1194,12 @@ if "alertas_monitor" in st.session_state:
     with t3:
         renderizar_tarjetas(l_prensa)
     with t4:
-        renderizar_tarjetas(l_crim)
+        renderizar_tarjetas(l_redes)
     with t5:
-        renderizar_tarjetas(l_cripto)
+        renderizar_tarjetas(l_crim)
     with t6:
-        renderizar_tarjetas(l_det)
+        renderizar_tarjetas(l_cripto)
     with t7:
+        renderizar_tarjetas(l_det)
+    with t8:
         renderizar_tarjetas(l_tg)
