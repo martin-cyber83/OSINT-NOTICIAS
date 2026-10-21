@@ -13,7 +13,6 @@ from difflib import SequenceMatcher
 from urllib.parse import urlparse, urlunparse
 import pandas as pd
 import io
-import time
 
 # ==========================================
 # CONFIGURACIÓN DE SESIÓN HTTP Y CACHÉ
@@ -95,7 +94,7 @@ def decodificar_url_google_news_offline(url_rss):
     return url_rss
 
 # ==========================================
-# TRADUCTOR DE TITULARES (EJECUCIÓN SECUENCIAL ANTI-BLOQUEO)
+# TRADUCTOR DE TITULARES
 # ==========================================
 def traducir_solo_titular(titular_orig):
     if not titular_orig:
@@ -221,7 +220,8 @@ def tiene_vector_amenaza_estricto(texto):
     vectores_cirilico = [
         "диверс", "шпион", "агент", "хакер", "кибер", "ддос", "ddos", "саботаж", "гибрид",
         "крипт", "биткоин", "usdt", "бпла", "дron", "дрон", "рэб", "арест", "задержан", "санкц", "кабел", "флот",
-        "казн", "пленн", "военн", "преступлен", "поджог", "теракт", "удар", "взрыв", "зеленск", "фронт"
+        "казн", "пленн", "военн", "преступлен", "поджог", "теракт", "удар", "взрыв", "зеленск", "фронт",
+        "гражданск", "больниц", "депортац", "гааг", "мкс"
     ]
     if any(c in t_raw for c in vectores_cirilico):
         return True
@@ -232,7 +232,10 @@ def tiene_vector_amenaza_estricto(texto):
         "desinformacion", "disinformation", "propaganda", "injerencia", "fimi",
         "cripto", "crypto", "bitcoin", "btc", "usdt", "tether", "garantex", "sancion", "sanction", "elusion",
         "flota fantasma", "shadow fleet", "cable submarino", "undersea cable", "petrolero",
-        "crimen de guerra", "war crime", "corte penal internacional", "icc", "genocidio", "tortura", "pow execution",
+        # Crímenes de guerra incorporados al vector para que no se descarten en la entrada
+        "crimen de guerra", "crimenes de guerra", "war crime", "war crimes", "corte penal internacional", "icc",
+        "genocidio", "tortura", "pow execution", "ejecucion", "masacre", "fosa comun", "bucha", "mariupol",
+        "ataque civil", "ataque a civiles", "hospital", "escuela", "deportacion", "ninos ucranianos",
         "detenido", "detencion", "arrestado", "arresto", "arrested", "detained", "dron", "uav", "guerra electronica",
         "jamming", "arson", "incendio provocado", "guerra", "ejercito", "militar", "otan", "nato", "frente", "misil",
         "ataque", "ofensiva", "bombardeo", "shariy", "sharij", "rybar", "zvinchuk"
@@ -240,16 +243,22 @@ def tiene_vector_amenaza_estricto(texto):
     return any(v in t_norm for v in vectores_latinos)
 
 # ==========================================
-# CATEGORIZACIÓN CORREGIDA 
+# CATEGORIZACIÓN
 # ==========================================
 def es_crimen_guerra(titular, cuerpo):
     t_all = normalizar_texto(f"{titular} {cuerpo}")
-    patron = r'\b(crimen de guerra|crimenes de guerra|war crime|war crimes|corte penal internacional|tribunal penal|lesa humanidad|genocidio|pow execution|tortura|bucha|mariupol|fosa comun|ejecucion de prisioneros)\b'
+    patron = r'\b(' \
+             r'crimen de guerra|crimenes de guerra|war crime|war crimes|' \
+             r'corte penal internacional|tribunal penal|cpi|icc|la haya|the hague|' \
+             r'lesa humanidad|genocidio|pow execution|tortura|torturas|' \
+             r'bucha|mariupol|fosa comun|fosas comunes|ejecucion de prisioneros|' \
+             r'deportacion de menores|deportacion forzada|deportacion de ninos|' \
+             r'ataque a civiles|bombardeo de hospital|bombardeo de civiles|masacre' \
+             r')\b'
     return bool(re.search(patron, t_all))
 
 def es_detencion(titular, cuerpo):
     t_all = normalizar_texto(f"{titular} {cuerpo}")
-    # Cubre conjugaciones, plurales y terminología policial ampliada[cite: 1]
     patron_det = r'\b(detenido|detenida|detenidos|detenidas|detienen|detiene|detencion|detenciones|arrestado|arrestada|arrestados|arrestadas|arrestan|arresta|arresto|arrestos|arrested|detained|festnahme|verhaftet|capturado|capturada|capturados|capturadas|capturan|desarticulad[oa]s?|prision|carcel|condenado|condenada|condenados|condenadas)\b'
     return bool(re.search(patron_det, t_all))
 
@@ -264,7 +273,6 @@ def es_empresa_esp(titular, cuerpo):
 
 def es_espana(titular, cuerpo):
     t_all = normalizar_texto(f"{titular} {cuerpo}")
-    # Ampliado para incluir "españoles", "española", "defensa"[cite: 1]
     patron = r'\b(espana|espanol|espanola|espanoles|espanolas|spain|madrid|barcelona|cni|incibe|ccn-cert|audiencia nacional|guardia civil|policia nacional|rota|torrejon|enaire|cartagena|gobierno|ministerio de defensa|margarita robles|defensa|puertos)\b'
     return bool(re.search(patron, t_all))
 
@@ -297,18 +305,18 @@ def generar_analisis_contexto(categoria, canal=""):
         return "Canal clasificado en la red de propaganda, desinformación e injerencia extranjera (FIMI) vinculada al ecosistema pro-Kremlin."
     if "rybar" in canal_clean.lower() or "zvinchuk" in canal_clean.lower():
         return "Análisis de Mijaíl Zvinchuk (@rybar): canal de inteligencia táctica y propaganda militar rusa de alta difusión."
+    if categoria == "CRIMENES":
+        return "Documentación de crímenes de guerra, ataques a población o infraestructuras civiles e investigaciones judiciales internacionales (CPI/ONU)."
+    if categoria == "DETENCION":
+        return "Operaciones policiales y contrainteligencia: neutralización y arresto de espías, saboteadores o colaboradores vinculados a la inteligencia rusa."
     if categoria == "REDES":
         return "Contenido capturado en redes sociales, canales de análisis en YouTube y cuentas de seguimiento del conflicto ruso-ucraniano."
-    if categoria == "CRIMENES":
-        return "Documentación de crímenes de guerra, ataques a población civil e investigaciones de la Corte Penal Internacional."
     if categoria == "EMPRESA":
         return "Seguimiento sobre empresas estratégicas de España (Defensa, Energía y Telecomunicaciones) ante ciberataques o sabotajes."
     if categoria == "ESPANA":
         return "Impacto directo en la seguridad nacional e infraestructuras críticas de España frente a operaciones hostiles."
     if categoria == "CRIPTO":
         return "Inteligencia financiera (FININT): evasión de sanciones internacionales y uso de criptoactivos (USDT, BTC)."
-    if categoria == "DETENCION":
-        return "Operaciones policiales y contrainteligencia: neutralización y arresto de espías, saboteadores o colaboradores vinculados a la inteligencia rusa."
     if categoria == "TELEGRAM":
         return "Reporte capturado de canales tácticos en Telegram: inteligencia operativa de primera línea."
     return "Actividad vinculada a operaciones híbridas globales del Kremlin: ciberataques, sabotaje o desinformación."
@@ -599,17 +607,27 @@ def procesar_un_feed_rss(datos_feed):
 
 def barrido_prensa_multilingue():
     fuentes_rss = [
+        # Fuentes nativas de The Objective
         ("https://theobjective.com/espana/feed/", "The Objective (España)"),
         ("https://theobjective.com/internacional/feed/", "The Objective (Internacional)"),
+
+        # Cobertura España y Seguridad
         ("https://news.google.com/rss/search?q=(Rusia+OR+ruso+OR+Kremlin+OR+NoName057+OR+APT28)+(España+OR+Madrid+OR+CNI+OR+INCIBE)+(sabotaje+OR+ciberataque+OR+espionaje+OR+amenaza)&hl=es&gl=ES&ceid=ES:es", "España Seguridad (ES)"),
         ("https://news.google.com/rss/search?q=(Russia+OR+Russian+OR+Kremlin)+(Spain+OR+Madrid)+(sabotage+OR+cyberattack+OR+spy+OR+espionage)&hl=en-US&gl=US&ceid=US:en", "Spain Watch (EN)"),
         ("https://news.google.com/rss/search?q=(Indra+OR+Navantia+OR+Escribano+OR+Sener+OR+Telefónica+OR+Iberdrola)+(Rusia+OR+ciberataque+OR+sabotaje+OR+hackers)&hl=es&gl=ES&ceid=ES:es", "Empresas España (ES)"),
+
+        # Detenciones por espionaje/sabotaje
         ("https://news.google.com/rss/search?q=(detenido+OR+arrestado+OR+detencion)+(espia+ruso+OR+sabotaje+ruso+OR+GRU+OR+FSB+OR+SVR)&hl=es&gl=ES&ceid=ES:es", "Detenciones (ES)"),
         ("https://news.google.com/rss/search?q=(arrested+OR+detained)+(Russian+spy+OR+Russian+sabotage+OR+GRU+OR+FSB)&hl=en-US&gl=US&ceid=US:en", "Detenciones (EN)"),
+
+        # Búsquedas reforzadas de CRÍMENES DE GUERRA
+        ("https://news.google.com/rss/search?q=(Rusia+OR+Putin+OR+tropas+rusas)+(\"crimenes+de+guerra\"+OR+\"crimen+de+guerra\"+OR+\"Corte+Penal+Internacional\"+OR+\"ataque+a+civiles\"+OR+\"deportacion+de+ninos\"+OR+\"fosa+comun\")&hl=es&gl=ES&ceid=ES:es", "Crímenes Guerra (ES)"),
+        ("https://news.google.com/rss/search?q=(Russia+OR+Russian+forces)+(\"war+crimes\"+OR+\"war+crime\"+OR+ICC+OR+\"civilian+attacks\"+OR+\"massacre\"+OR+\"POW+execution\")&hl=en-US&gl=US&ceid=US:en", "War Crimes Watch (EN)"),
+
+        # Inteligencia global y FININT
         ("https://news.google.com/rss/search?q=(Russia+OR+Ukraine)+(sabotage+OR+cyberattack+OR+espionage+OR+\"hybrid+warfare\"+OR+partisan)&hl=en-US&gl=US&ceid=US:en", "Intel Global (EN)"),
         ("https://news.google.com/rss/search?q=(Rusia+OR+Ucrania)+(sabotaje+OR+ciberataque+OR+espionaje+OR+\"guerra+hibrida\")&hl=es&gl=ES&ceid=ES:es", "Frente Global (ES)"),
-        ("https://news.google.com/rss/search?q=(crypto+OR+bitcoin+OR+USDT+OR+Tether)+(Russia+OR+sanctions+OR+Garantex)&hl=en-US&gl=US&ceid=US:en", "FININT Cripto (EN)"),
-        ("https://news.google.com/rss/search?q=(Rusia+OR+Putin+OR+Ucrania)+(\"crimenes+de+guerra\"+OR+\"crimen+de+guerra\"+OR+\"Corte+Penal+Internacional\")&hl=es&gl=ES&ceid=ES:es", "Crímenes Guerra (ES)")
+        ("https://news.google.com/rss/search?q=(crypto+OR+bitcoin+OR+USDT+OR+Tether)+(Russia+OR+sanctions+OR+Garantex)&hl=en-US&gl=US&ceid=US:en", "FININT Cripto (EN)")
     ]
     todas = []
     with ThreadPoolExecutor(max_workers=10) as ex:
@@ -670,7 +688,7 @@ def ejecutar_actualizacion_total():
         st.session_state.seleccionadas_pdf = set()
         return
 
-    # TRADUCCIÓN SECUENCIAL PARA EVITAR BLOQUEOS (HTTP 429) DE GOOGLE
+    # Traducción secuencial anti-bloqueo
     titulares_traducidos = []
     for item in pre_unicos:
         titulares_traducidos.append(traducir_solo_titular(item["titular_raw"]))
@@ -691,15 +709,21 @@ def ejecutar_actualizacion_total():
             titular_final = tit_es
             tit_sin_medio = limpiar_firma_medio(titular_final)
 
-            # ORDEN CORREGIDO: España y Empresas se evalúan primero[cite: 1]
+            # Prioridad de clasificación ordenada:
+            # 1. Empresas estratégicas
+            # 2. España / Defensa
+            # 3. Crímenes de guerra
+            # 4. Detenciones
+            # 5. Cripto / Finanzas
+            # 6. Global
             if es_empresa_esp(tit_sin_medio, cuerpo_intacto):
                 cat_final = "EMPRESA"
             elif es_espana(tit_sin_medio, cuerpo_intacto):
                 cat_final = "ESPANA"
-            elif es_detencion(tit_sin_medio, cuerpo_intacto):
-                cat_final = "DETENCION"
             elif es_crimen_guerra(tit_sin_medio, cuerpo_intacto):
                 cat_final = "CRIMENES"
+            elif es_detencion(tit_sin_medio, cuerpo_intacto):
+                cat_final = "DETENCION"
             elif es_cripto(tit_sin_medio, cuerpo_intacto):
                 cat_final = "CRIPTO"
             else:
@@ -1145,7 +1169,7 @@ def renderizar_tarjetas(lista_items):
             st.markdown(tarjeta_html, unsafe_allow_html=True)
 
 # ==========================================
-# PESTAÑAS (ORDEN ORIGINAL RESTAURADO)
+# PESTAÑAS (ORDEN ORIGINAL: ESPAÑA > EMPRESAS > GLOBAL > CRÍMENES > CRIPTO > DETENCIONES > TELEGRAM > REDES)
 # ==========================================
 if "alertas_monitor" in st.session_state:
     l_esp = [x for x in datos_activos if x.get("categoria") == "ESPANA"]
@@ -1157,7 +1181,6 @@ if "alertas_monitor" in st.session_state:
     l_tg = [x for x in datos_activos if x.get("categoria") == "TELEGRAM"]
     l_redes = [x for x in datos_activos if x.get("categoria") == "REDES"]
 
-    # Orden exacto solicitado: España > Empresas > Global > Crímenes > Cripto > Detenciones > Telegram > Redes[cite: 1]
     t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([
         f"🇪🇸 ESPAÑA ({len(l_esp)})",
         f"🏢 EMPRESAS ({len(l_emp)})",
@@ -1168,12 +1191,19 @@ if "alertas_monitor" in st.session_state:
         f"✈️ TELEGRAM ({len(l_tg)})",
         f"🌐 REDES SOCIALES ({len(l_redes)})"
     ])
-    
-    with t1: renderizar_tarjetas(l_esp)
-    with t2: renderizar_tarjetas(l_emp)
-    with t3: renderizar_tarjetas(l_prensa)
-    with t4: renderizar_tarjetas(l_crim)
-    with t5: renderizar_tarjetas(l_cripto)
-    with t6: renderizar_tarjetas(l_det)
-    with t7: renderizar_tarjetas(l_tg)
-    with t8: renderizar_tarjetas(l_redes)
+    with t1:
+        renderizar_tarjetas(l_esp)
+    with t2:
+        renderizar_tarjetas(l_emp)
+    with t3:
+        renderizar_tarjetas(l_prensa)
+    with t4:
+        renderizar_tarjetas(l_crim)
+    with t5:
+        renderizar_tarjetas(l_cripto)
+    with t6:
+        renderizar_tarjetas(l_det)
+    with t7:
+        renderizar_tarjetas(l_tg)
+    with t8:
+        renderizar_tarjetas(l_redes)
