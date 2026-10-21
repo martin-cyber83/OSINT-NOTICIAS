@@ -94,7 +94,7 @@ def decodificar_url_google_news_offline(url_rss):
     return url_rss
 
 # ==========================================
-# TRADUCTOR DE TITULARES
+# TRADUCTOR DE TITULARES (SECUENCIAL ANTI-BLOQUEO)
 # ==========================================
 def traducir_solo_titular(titular_orig):
     if not titular_orig:
@@ -232,13 +232,11 @@ def tiene_vector_amenaza_estricto(texto):
         "desinformacion", "disinformation", "propaganda", "injerencia", "fimi",
         "cripto", "crypto", "bitcoin", "btc", "usdt", "tether", "garantex", "sancion", "sanction", "elusion",
         "flota fantasma", "shadow fleet", "cable submarino", "undersea cable", "petrolero",
-        # Crímenes de guerra incorporados al vector para que no se descarten en la entrada
-        "crimen de guerra", "crimenes de guerra", "war crime", "war crimes", "corte penal internacional", "icc",
-        "genocidio", "tortura", "pow execution", "ejecucion", "masacre", "fosa comun", "bucha", "mariupol",
-        "ataque civil", "ataque a civiles", "hospital", "escuela", "deportacion", "ninos ucranianos",
-        "detenido", "detencion", "arrestado", "arresto", "arrested", "detained", "dron", "uav", "guerra electronica",
-        "jamming", "arson", "incendio provocado", "guerra", "ejercito", "militar", "otan", "nato", "frente", "misil",
-        "ataque", "ofensiva", "bombardeo", "shariy", "sharij", "rybar", "zvinchuk"
+        "crimen de guerra", "war crime", "corte penal internacional", "icc", "genocidio", "tortura", "pow execution",
+        "ejecucion", "masacre", "fosa comun", "bucha", "mariupol", "ataque a civiles", "hospital", "escuela",
+        "deportacion", "ninos ucranianos", "detenido", "detencion", "arrestado", "arresto", "arrested", "detained",
+        "dron", "uav", "guerra electronica", "jamming", "arson", "incendio provocado", "guerra", "ejercito", "militar",
+        "otan", "nato", "frente", "misil", "ataque", "ofensiva", "bombardeo", "shariy", "sharij", "rybar", "zvinchuk"
     ]
     return any(v in t_norm for v in vectores_latinos)
 
@@ -301,10 +299,12 @@ def calcular_puntuacion_severidad(categoria, titular, cuerpo):
 
 def generar_analisis_contexto(categoria, canal=""):
     canal_clean = canal.replace("@", "")
+    if "rybar" in canal_clean.lower() or "zvinchuk" in canal_clean.lower():
+        return "Análisis táctico y propaganda militar de Mijaíl Zvinchuk (@rybar), exoficial del Ministerio de Defensa ruso."
+    if "sharij" in canal_clean.lower() or "shariy" in canal_clean.lower():
+        return "Contenido de Anatolii Sharij: seguimiento crítico y difusión en redes del frente ucraniano-ruso."
     if canal_clean in CANALES_DESINFORMACION_ESP:
         return "Canal clasificado en la red de propaganda, desinformación e injerencia extranjera (FIMI) vinculada al ecosistema pro-Kremlin."
-    if "rybar" in canal_clean.lower() or "zvinchuk" in canal_clean.lower():
-        return "Análisis de Mijaíl Zvinchuk (@rybar): canal de inteligencia táctica y propaganda militar rusa de alta difusión."
     if categoria == "CRIMENES":
         return "Documentación de crímenes de guerra, ataques a población o infraestructuras civiles e investigaciones judiciales internacionales (CPI/ONU)."
     if categoria == "DETENCION":
@@ -380,7 +380,7 @@ def barrido_canales_youtube():
     return todas
 
 # ==========================================
-# RASTREADOR TELEGRAM
+# RASTREADOR TELEGRAM (ZVINCHUK Y SHARIJ EN REDES)
 # ==========================================
 def raspar_un_canal_tg(canal):
     mensajes = []
@@ -391,7 +391,8 @@ def raspar_un_canal_tg(canal):
         soup = BeautifulSoup(r.text, "html.parser")
         posts = soup.find_all("div", class_="tgme_widget_message_wrap")
 
-        es_red_social = (canal == "ASupersharij")
+        # Tanto Anatolii Sharij como Mijaíl Zvinchuk (@rybar) se catalogan como REDES
+        es_red_social = canal in ["ASupersharij", "rybar"]
 
         for p in posts[-35:]:
             time_tag = p.find("time")
@@ -446,14 +447,17 @@ def raspar_un_canal_tg(canal):
             primera_frase = re.split(r'(?<=[.!?])\s+', texto_sin_urls)[0]
             tit_corto = primera_frase if 20 <= len(primera_frase) <= 160 else texto_sin_urls[:140]
 
-            nombre_canal_visual = f"@{canal}"
-            if canal.lower() == "rybar":
+            if canal == "rybar":
                 nombre_canal_visual = "Mijaíl Zvinchuk (@rybar)"
+            elif canal == "ASupersharij":
+                nombre_canal_visual = "Telegram: Anatolii Sharij"
+            else:
+                nombre_canal_visual = f"@{canal}"
 
             mensajes.append({
                 "id": f"TG-{hash(link)}",
                 "plataforma": "REDES" if es_red_social else "TELEGRAM",
-                "canal": f"Telegram: @{canal}" if es_red_social else nombre_canal_visual,
+                "canal": nombre_canal_visual,
                 "fecha_dt": dt_obj,
                 "titular_raw": tit_corto,
                 "cuerpo_raw": texto_sin_urls[:2200],
@@ -467,13 +471,13 @@ def raspar_un_canal_tg(canal):
 
 def raspar_telegram_masivo():
     canales = [
-        "rybar",
+        "rybar",        # Mijaíl Zvinchuk
+        "ASupersharij", # Anatolii Sharij
         "DIUkraine", "SBUkr", "informnapalm", "cyberresistanceua",
         "entre_guerras", "dva_majors", "vchkogpu",
         "meduzalive", "astrapress", "istories_media",
         "ostorozhno_novosti", "nvua_official", "operativnoZSU",
-        "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu",
-        "ASupersharij"
+        "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu"
     ]
     todos = []
     with ThreadPoolExecutor(max_workers=10) as ex:
@@ -557,7 +561,7 @@ def raspar_antikor():
     return items
 
 # ==========================================
-# RECOLECTOR RSS PRENSA
+# RECOLECTOR RSS PRENSA (CON THE OBJECTIVE)
 # ==========================================
 def procesar_un_feed_rss(datos_feed):
     url, etiqueta = datos_feed
@@ -607,7 +611,8 @@ def procesar_un_feed_rss(datos_feed):
 
 def barrido_prensa_multilingue():
     fuentes_rss = [
-        # Fuentes nativas de The Objective
+        # The Objective Feeds nativos
+        ("https://theobjective.com/feed/", "The Objective (General)"),
         ("https://theobjective.com/espana/feed/", "The Objective (España)"),
         ("https://theobjective.com/internacional/feed/", "The Objective (Internacional)"),
 
@@ -620,7 +625,7 @@ def barrido_prensa_multilingue():
         ("https://news.google.com/rss/search?q=(detenido+OR+arrestado+OR+detencion)+(espia+ruso+OR+sabotaje+ruso+OR+GRU+OR+FSB+OR+SVR)&hl=es&gl=ES&ceid=ES:es", "Detenciones (ES)"),
         ("https://news.google.com/rss/search?q=(arrested+OR+detained)+(Russian+spy+OR+Russian+sabotage+OR+GRU+OR+FSB)&hl=en-US&gl=US&ceid=US:en", "Detenciones (EN)"),
 
-        # Búsquedas reforzadas de CRÍMENES DE GUERRA
+        # Crímenes de Guerra
         ("https://news.google.com/rss/search?q=(Rusia+OR+Putin+OR+tropas+rusas)+(\"crimenes+de+guerra\"+OR+\"crimen+de+guerra\"+OR+\"Corte+Penal+Internacional\"+OR+\"ataque+a+civiles\"+OR+\"deportacion+de+ninos\"+OR+\"fosa+comun\")&hl=es&gl=ES&ceid=ES:es", "Crímenes Guerra (ES)"),
         ("https://news.google.com/rss/search?q=(Russia+OR+Russian+forces)+(\"war+crimes\"+OR+\"war+crime\"+OR+ICC+OR+\"civilian+attacks\"+OR+\"massacre\"+OR+\"POW+execution\")&hl=en-US&gl=US&ceid=US:en", "War Crimes Watch (EN)"),
 
@@ -709,21 +714,15 @@ def ejecutar_actualizacion_total():
             titular_final = tit_es
             tit_sin_medio = limpiar_firma_medio(titular_final)
 
-            # Prioridad de clasificación ordenada:
-            # 1. Empresas estratégicas
-            # 2. España / Defensa
-            # 3. Crímenes de guerra
-            # 4. Detenciones
-            # 5. Cripto / Finanzas
-            # 6. Global
+            # Clasificación prioritaria: España y Empresas primero
             if es_empresa_esp(tit_sin_medio, cuerpo_intacto):
                 cat_final = "EMPRESA"
             elif es_espana(tit_sin_medio, cuerpo_intacto):
                 cat_final = "ESPANA"
-            elif es_crimen_guerra(tit_sin_medio, cuerpo_intacto):
-                cat_final = "CRIMENES"
             elif es_detencion(tit_sin_medio, cuerpo_intacto):
                 cat_final = "DETENCION"
+            elif es_crimen_guerra(tit_sin_medio, cuerpo_intacto):
+                cat_final = "CRIMENES"
             elif es_cripto(tit_sin_medio, cuerpo_intacto):
                 cat_final = "CRIPTO"
             else:
@@ -1169,7 +1168,7 @@ def renderizar_tarjetas(lista_items):
             st.markdown(tarjeta_html, unsafe_allow_html=True)
 
 # ==========================================
-# PESTAÑAS (ORDEN ORIGINAL: ESPAÑA > EMPRESAS > GLOBAL > CRÍMENES > CRIPTO > DETENCIONES > TELEGRAM > REDES)
+# PESTAÑAS (ORDEN ORIGINAL)
 # ==========================================
 if "alertas_monitor" in st.session_state:
     l_esp = [x for x in datos_activos if x.get("categoria") == "ESPANA"]
