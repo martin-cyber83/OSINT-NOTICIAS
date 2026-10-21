@@ -13,6 +13,7 @@ from difflib import SequenceMatcher
 from urllib.parse import urlparse, urlunparse
 import pandas as pd
 import io
+import time
 
 # ==========================================
 # CONFIGURACIÓN DE SESIÓN HTTP Y CACHÉ
@@ -94,7 +95,7 @@ def decodificar_url_google_news_offline(url_rss):
     return url_rss
 
 # ==========================================
-# TRADUCTOR DE TITULARES
+# TRADUCTOR DE TITULARES (EJECUCIÓN SECUENCIAL ANTI-BLOQUEO)
 # ==========================================
 def traducir_solo_titular(titular_orig):
     if not titular_orig:
@@ -116,7 +117,7 @@ def traducir_solo_titular(titular_orig):
     try:
         url = "https://translate.googleapis.com/translate_a/single"
         params = {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:350]}
-        r = SESION_HTTP.get(url, params=params, timeout=2.5)
+        r = SESION_HTTP.get(url, params=params, timeout=3.0)
         if r.status_code == 200:
             data = r.json()
             if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
@@ -239,22 +240,18 @@ def tiene_vector_amenaza_estricto(texto):
     return any(v in t_norm for v in vectores_latinos)
 
 # ==========================================
-# CATEGORIZACIÓN CORREGIDA (DETENCIONES INFALIBLES)
+# CATEGORIZACIÓN CORREGIDA 
 # ==========================================
-
-def es_detencion(titular, cuerpo):
-    """
-    Versión infalible: Como la noticia ya ha superado el filtro de vinculación rusa 
-    y vector de amenaza, cualquier mención a acción policial o judicial la clasifica aquí.
-    """
-    t_all = normalizar_texto(f"{titular} {cuerpo}")
-    patron_det = r'\b(detenido|detenida|detenidos|detenidas|detencion|detenciones|arrestado|arrestada|arrestados|arrestadas|arresto|arrestos|arrested|detained|festnahme|verhaftet|capturado|capturados|desarticulad|prision|carcel|condenado|condenada)\b'
-    return bool(re.search(patron_det, t_all))
-
 def es_crimen_guerra(titular, cuerpo):
     t_all = normalizar_texto(f"{titular} {cuerpo}")
     patron = r'\b(crimen de guerra|crimenes de guerra|war crime|war crimes|corte penal internacional|tribunal penal|lesa humanidad|genocidio|pow execution|tortura|bucha|mariupol|fosa comun|ejecucion de prisioneros)\b'
     return bool(re.search(patron, t_all))
+
+def es_detencion(titular, cuerpo):
+    t_all = normalizar_texto(f"{titular} {cuerpo}")
+    # Cubre conjugaciones, plurales y terminología policial ampliada[cite: 1]
+    patron_det = r'\b(detenido|detenida|detenidos|detenidas|detienen|detiene|detencion|detenciones|arrestado|arrestada|arrestados|arrestadas|arrestan|arresta|arresto|arrestos|arrested|detained|festnahme|verhaftet|capturado|capturada|capturados|capturadas|capturan|desarticulad[oa]s?|prision|carcel|condenado|condenada|condenados|condenadas)\b'
+    return bool(re.search(patron_det, t_all))
 
 def es_cripto(titular, cuerpo):
     t_all = normalizar_texto(f"{titular} {cuerpo}")
@@ -267,7 +264,8 @@ def es_empresa_esp(titular, cuerpo):
 
 def es_espana(titular, cuerpo):
     t_all = normalizar_texto(f"{titular} {cuerpo}")
-    patron = r'\b(espana|spain|madrid|barcelona|cni|incibe|ccn-cert|audiencia nacional|guardia civil|policia nacional|rota|torrejon|enaire|cartagena|gobierno espanol|ministerio de defensa|puertos espanoles)\b'
+    # Ampliado para incluir "españoles", "española", "defensa"[cite: 1]
+    patron = r'\b(espana|espanol|espanola|espanoles|espanolas|spain|madrid|barcelona|cni|incibe|ccn-cert|audiencia nacional|guardia civil|policia nacional|rota|torrejon|enaire|cartagena|gobierno|ministerio de defensa|margarita robles|defensa|puertos)\b'
     return bool(re.search(patron, t_all))
 
 def calcular_puntuacion_severidad(categoria, titular, cuerpo):
@@ -374,7 +372,7 @@ def barrido_canales_youtube():
     return todas
 
 # ==========================================
-# RASTREADOR TELEGRAM (CON MIJAÍL ZVINCHUK / RYBAR)
+# RASTREADOR TELEGRAM
 # ==========================================
 def raspar_un_canal_tg(canal):
     mensajes = []
@@ -440,7 +438,6 @@ def raspar_un_canal_tg(canal):
             primera_frase = re.split(r'(?<=[.!?])\s+', texto_sin_urls)[0]
             tit_corto = primera_frase if 20 <= len(primera_frase) <= 160 else texto_sin_urls[:140]
 
-            # Identificador especial para Mijaíl Zvinchuk
             nombre_canal_visual = f"@{canal}"
             if canal.lower() == "rybar":
                 nombre_canal_visual = "Mijaíl Zvinchuk (@rybar)"
@@ -462,7 +459,7 @@ def raspar_un_canal_tg(canal):
 
 def raspar_telegram_masivo():
     canales = [
-        "rybar",  # Mijaíl Zvinchuk
+        "rybar",
         "DIUkraine", "SBUkr", "informnapalm", "cyberresistanceua",
         "entre_guerras", "dva_majors", "vchkogpu",
         "meduzalive", "astrapress", "istories_media",
@@ -552,7 +549,7 @@ def raspar_antikor():
     return items
 
 # ==========================================
-# RECOLECTOR RSS PRENSA (CON THE OBJECTIVE)
+# RECOLECTOR RSS PRENSA
 # ==========================================
 def procesar_un_feed_rss(datos_feed):
     url, etiqueta = datos_feed
@@ -602,20 +599,13 @@ def procesar_un_feed_rss(datos_feed):
 
 def barrido_prensa_multilingue():
     fuentes_rss = [
-        # Nuevas fuentes directas de The Objective
         ("https://theobjective.com/espana/feed/", "The Objective (España)"),
         ("https://theobjective.com/internacional/feed/", "The Objective (Internacional)"),
-        
-        # Cobertura España y Seguridad
         ("https://news.google.com/rss/search?q=(Rusia+OR+ruso+OR+Kremlin+OR+NoName057+OR+APT28)+(España+OR+Madrid+OR+CNI+OR+INCIBE)+(sabotaje+OR+ciberataque+OR+espionaje+OR+amenaza)&hl=es&gl=ES&ceid=ES:es", "España Seguridad (ES)"),
         ("https://news.google.com/rss/search?q=(Russia+OR+Russian+OR+Kremlin)+(Spain+OR+Madrid)+(sabotage+OR+cyberattack+OR+spy+OR+espionage)&hl=en-US&gl=US&ceid=US:en", "Spain Watch (EN)"),
         ("https://news.google.com/rss/search?q=(Indra+OR+Navantia+OR+Escribano+OR+Sener+OR+Telefónica+OR+Iberdrola)+(Rusia+OR+ciberataque+OR+sabotaje+OR+hackers)&hl=es&gl=ES&ceid=ES:es", "Empresas España (ES)"),
-        
-        # Detenciones
         ("https://news.google.com/rss/search?q=(detenido+OR+arrestado+OR+detencion)+(espia+ruso+OR+sabotaje+ruso+OR+GRU+OR+FSB+OR+SVR)&hl=es&gl=ES&ceid=ES:es", "Detenciones (ES)"),
         ("https://news.google.com/rss/search?q=(arrested+OR+detained)+(Russian+spy+OR+Russian+sabotage+OR+GRU+OR+FSB)&hl=en-US&gl=US&ceid=US:en", "Detenciones (EN)"),
-        
-        # Global
         ("https://news.google.com/rss/search?q=(Russia+OR+Ukraine)+(sabotage+OR+cyberattack+OR+espionage+OR+\"hybrid+warfare\"+OR+partisan)&hl=en-US&gl=US&ceid=US:en", "Intel Global (EN)"),
         ("https://news.google.com/rss/search?q=(Rusia+OR+Ucrania)+(sabotaje+OR+ciberataque+OR+espionaje+OR+\"guerra+hibrida\")&hl=es&gl=ES&ceid=ES:es", "Frente Global (ES)"),
         ("https://news.google.com/rss/search?q=(crypto+OR+bitcoin+OR+USDT+OR+Tether)+(Russia+OR+sanctions+OR+Garantex)&hl=en-US&gl=US&ceid=US:en", "FININT Cripto (EN)"),
@@ -680,8 +670,10 @@ def ejecutar_actualizacion_total():
         st.session_state.seleccionadas_pdf = set()
         return
 
-    with ThreadPoolExecutor(max_workers=10) as ex:
-        titulares_traducidos = list(ex.map(lambda it: traducir_solo_titular(it["titular_raw"]), pre_unicos))
+    # TRADUCCIÓN SECUENCIAL PARA EVITAR BLOQUEOS (HTTP 429) DE GOOGLE
+    titulares_traducidos = []
+    for item in pre_unicos:
+        titulares_traducidos.append(traducir_solo_titular(item["titular_raw"]))
 
     alertas_finales = []
     for item, tit_es in zip(pre_unicos, titulares_traducidos):
@@ -699,15 +691,15 @@ def ejecutar_actualizacion_total():
             titular_final = tit_es
             tit_sin_medio = limpiar_firma_medio(titular_final)
 
-            # ORDEN CORREGIDO: Las detenciones se evalúan primero con su nueva regla infalible
-            if es_detencion(tit_sin_medio, cuerpo_intacto):
-                cat_final = "DETENCION"
-            elif es_crimen_guerra(tit_sin_medio, cuerpo_intacto):
-                cat_final = "CRIMENES"
-            elif es_empresa_esp(tit_sin_medio, cuerpo_intacto):
+            # ORDEN CORREGIDO: España y Empresas se evalúan primero[cite: 1]
+            if es_empresa_esp(tit_sin_medio, cuerpo_intacto):
                 cat_final = "EMPRESA"
             elif es_espana(tit_sin_medio, cuerpo_intacto):
                 cat_final = "ESPANA"
+            elif es_detencion(tit_sin_medio, cuerpo_intacto):
+                cat_final = "DETENCION"
+            elif es_crimen_guerra(tit_sin_medio, cuerpo_intacto):
+                cat_final = "CRIMENES"
             elif es_cripto(tit_sin_medio, cuerpo_intacto):
                 cat_final = "CRIPTO"
             else:
@@ -771,10 +763,10 @@ def exportar_alertas_csv(alertas):
 SECCIONES_INFORME = [
     ("ESPANA", "SECCIÓN 1: ESPAÑA E INFRAESTRUCTURAS CRÍTICAS", "#dc2626"),
     ("EMPRESA", "SECCIÓN 2: EMPRESAS ESTRATÉGICAS DE ESPAÑA Y DEFENSA", "#d97706"),
-    ("DETENCION", "SECCIÓN 3: DETENCIONES POR ESPIONAJE Y SABOTAJE", "#be123c"),
-    ("GLOBAL", "SECCIÓN 4: RUSIA, UCRANIA Y AMENAZAS GLOBALES", "#0f172a"),
-    ("CRIMENES", "SECCIÓN 5: CRÍMENES DE GUERRA Y DERECHOS HUMANOS", "#991b1b"),
-    ("CRIPTO", "SECCIÓN 6: CRIPTOACTIVOS Y FINANCIACIÓN ILÍCITA", "#7c3aed"),
+    ("GLOBAL", "SECCIÓN 3: RUSIA, UCRANIA Y AMENAZAS GLOBALES", "#0f172a"),
+    ("CRIMENES", "SECCIÓN 4: CRÍMENES DE GUERRA Y DERECHOS HUMANOS", "#991b1b"),
+    ("CRIPTO", "SECCIÓN 5: CRIPTOACTIVOS Y FINANCIACIÓN ILÍCITA", "#7c3aed"),
+    ("DETENCION", "SECCIÓN 6: DETENCIONES POR ESPIONAJE Y SABOTAJE", "#be123c"),
     ("TELEGRAM", "SECCIÓN 7: TELEGRAM OSINT Y CANALES TÁCTICOS", "#0284c7"),
     ("REDES", "SECCIÓN 8: REDES SOCIALES Y ANÁLISIS MULTIMEDIA", "#059669")
 ]
@@ -938,10 +930,10 @@ st.markdown("""
     }
     button[data-baseweb="tab"]:nth-child(1) { background-color: #dc2626 !important; }
     button[data-baseweb="tab"]:nth-child(2) { background-color: #d97706 !important; }
-    button[data-baseweb="tab"]:nth-child(3) { background-color: #be123c !important; }
-    button[data-baseweb="tab"]:nth-child(4) { background-color: #1e293b !important; }
-    button[data-baseweb="tab"]:nth-child(5) { background-color: #991b1b !important; }
-    button[data-baseweb="tab"]:nth-child(6) { background-color: #7c3aed !important; }
+    button[data-baseweb="tab"]:nth-child(3) { background-color: #1e293b !important; }
+    button[data-baseweb="tab"]:nth-child(4) { background-color: #991b1b !important; }
+    button[data-baseweb="tab"]:nth-child(5) { background-color: #7c3aed !important; }
+    button[data-baseweb="tab"]:nth-child(6) { background-color: #be123c !important; }
     button[data-baseweb="tab"]:nth-child(7) { background-color: #0284c7 !important; }
     button[data-baseweb="tab"]:nth-child(8) { background-color: #059669 !important; }
 
@@ -1153,41 +1145,35 @@ def renderizar_tarjetas(lista_items):
             st.markdown(tarjeta_html, unsafe_allow_html=True)
 
 # ==========================================
-# PESTAÑAS (ORDEN PRIORITARIO CON DETENCIONES EN 3ª)
+# PESTAÑAS (ORDEN ORIGINAL RESTAURADO)
 # ==========================================
 if "alertas_monitor" in st.session_state:
     l_esp = [x for x in datos_activos if x.get("categoria") == "ESPANA"]
     l_emp = [x for x in datos_activos if x.get("categoria") == "EMPRESA"]
-    l_det = [x for x in datos_activos if x.get("categoria") == "DETENCION"]
     l_prensa = [x for x in datos_activos if x.get("categoria") == "GLOBAL"]
     l_crim = [x for x in datos_activos if x.get("categoria") == "CRIMENES"]
     l_cripto = [x for x in datos_activos if x.get("categoria") == "CRIPTO"]
+    l_det = [x for x in datos_activos if x.get("categoria") == "DETENCION"]
     l_tg = [x for x in datos_activos if x.get("categoria") == "TELEGRAM"]
     l_redes = [x for x in datos_activos if x.get("categoria") == "REDES"]
 
+    # Orden exacto solicitado: España > Empresas > Global > Crímenes > Cripto > Detenciones > Telegram > Redes[cite: 1]
     t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([
         f"🇪🇸 ESPAÑA ({len(l_esp)})",
         f"🏢 EMPRESAS ({len(l_emp)})",
-        f"🛑 DETENCIONES ({len(l_det)})",
         f"📰 GLOBAL ({len(l_prensa)})",
         f"⚖️ CRÍMENES GUERRA ({len(l_crim)})",
         f"🟣 CRIPTO ({len(l_cripto)})",
+        f"🛑 DETENCIONES ({len(l_det)})",
         f"✈️ TELEGRAM ({len(l_tg)})",
         f"🌐 REDES SOCIALES ({len(l_redes)})"
     ])
-    with t1:
-        renderizar_tarjetas(l_esp)
-    with t2:
-        renderizar_tarjetas(l_emp)
-    with t3:
-        renderizar_tarjetas(l_det)
-    with t4:
-        renderizar_tarjetas(l_prensa)
-    with t5:
-        renderizar_tarjetas(l_crim)
-    with t6:
-        renderizar_tarjetas(l_cripto)
-    with t7:
-        renderizar_tarjetas(l_tg)
-    with t8:
-        renderizar_tarjetas(l_redes)
+    
+    with t1: renderizar_tarjetas(l_esp)
+    with t2: renderizar_tarjetas(l_emp)
+    with t3: renderizar_tarjetas(l_prensa)
+    with t4: renderizar_tarjetas(l_crim)
+    with t5: renderizar_tarjetas(l_cripto)
+    with t6: renderizar_tarjetas(l_det)
+    with t7: renderizar_tarjetas(l_tg)
+    with t8: renderizar_tarjetas(l_redes)
