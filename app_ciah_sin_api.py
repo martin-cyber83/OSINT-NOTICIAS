@@ -173,14 +173,14 @@ PATRON_RUSIA_ESTRICTO = re.compile(
     r'gru|fsb|svr|apt28|apt29|fancy bear|cozy bear|sandworm|noname057|killnet|turla|gamaredon|cyberarmyofrussia|garantex|wagner|'
     r'bielorrusia|belarus|kaliningrado|kaliningrad|lukashenko|'
     r'ucrania|ucraniano|ucraniana|ucranianos|ukraine|ukrainian|zelensky|zelenski|zsu|vsu|sbu|gur|'
-    r'kursk|belgorod|donbas|donbass|crimea|zaporiyia|zaporizhzhia|kherson|donetsk|lugansk|luhansk|jarkov|kharkiv|shariy|sharij'
+    r'kursk|belgorod|donbas|donbass|crimea|zaporiyia|zaporizhzhia|kherson|donetsk|lugansk|luhansk|jarkov|kharkiv|shariy|sharij|zvinchuk|rybar'
     r')\b', re.IGNORECASE
 )
 
 RAICES_CIRILICO_RUSIA = [
     "росси", "рф", "москв", "кремл", "путин", "гру", "фсб", "свр",
     "украин", "киев", "київ", "зсу", "всу", "сбу", "гур", "донбасс",
-    "крым", "беларус", "вагнер", "шахед", "геран", "искандер", "шарий"
+    "крым", "беларус", "вагнер", "шахед", "геран", "искандер", "шарий", "рыбарь", "звинчук"
 ]
 
 PATRON_PAISES_AJENOS = re.compile(
@@ -208,7 +208,7 @@ def tiene_vinculo_ruso_estricto(texto):
         return True
 
     if PATRON_PAISES_AJENOS.search(t_norm):
-        if not re.search(r'\b(kremlin|putin|tropas rusas|fuerzas armadas rusas|moscu|espionaje ruso|invasion rusa|shariy|sharij)\b', t_norm):
+        if not re.search(r'\b(kremlin|putin|tropas rusas|fuerzas armadas rusas|moscu|espionaje ruso|invasion rusa|shariy|sharij|rybar|zvinchuk)\b', t_norm):
             return False
 
     return bool(PATRON_RUSIA_ESTRICTO.search(t_norm))
@@ -232,8 +232,9 @@ def tiene_vector_amenaza_estricto(texto):
         "cripto", "crypto", "bitcoin", "btc", "usdt", "tether", "garantex", "sancion", "sanction", "elusion",
         "flota fantasma", "shadow fleet", "cable submarino", "undersea cable", "petrolero",
         "crimen de guerra", "war crime", "corte penal internacional", "icc", "genocidio", "tortura", "pow execution",
-        "detenido", "arrestado", "arrested", "detained", "dron", "uav", "guerra electronica", "jamming", "arson", "incendio provocado",
-        "guerra", "ejercito", "militar", "otan", "nato", "frente", "misil", "ataque", "ofensiva", "bombardeo", "shariy", "sharij"
+        "detenido", "detencion", "arrestado", "arresto", "arrested", "detained", "dron", "uav", "guerra electronica",
+        "jamming", "arson", "incendio provocado", "guerra", "ejercito", "militar", "otan", "nato", "frente", "misil",
+        "ataque", "ofensiva", "bombardeo", "shariy", "sharij", "rybar", "zvinchuk"
     ]
     return any(v in t_norm for v in vectores_latinos)
 
@@ -242,12 +243,12 @@ def es_crimen_guerra(titular, cuerpo):
     patron = r'\b(crimen de guerra|crimenes de guerra|war crime|war crimes|corte penal internacional|tribunal penal|lesa humanidad|genocidio|pow execution|tortura|bucha|mariupol|fosa comun|ejecucion de prisioneros)\b'
     return bool(re.search(patron, t_all))
 
+# DETENCIONES BLINDADAS (NO SE DESVÍA A GLOBAL)
 def es_detencion(titular, cuerpo):
-    t_tit = normalizar_texto(titular)
     t_all = normalizar_texto(f"{titular} {cuerpo}")
-    patron_det = r'\b(detenido|detenidos|arrestado|arrestados|arrested|detained|festnahme|capturado)\b'
-    patron_motivo = r'\b(espia|spy|espionage|espionaje|sabotaje|sabotage|gru|fsb|svr|ciber|hacker|infiltrado|traicion|treason)\b'
-    return bool(re.search(patron_det, t_tit)) and bool(re.search(patron_motivo, t_all))
+    patron_det = r'\b(detenido|detenida|detenidos|detenidas|detencion|detenciones|arrestado|arrestada|arrestados|arrestadas|arresto|arrestos|arrested|detained|festnahme|verhaftet|capturado|esposado|prision provisional|prision preventiva)\b'
+    patron_actor_espia = r'\b(espia|espias|spy|spies|espionage|espionaje|spying|sabotaje|sabotage|saboteador|saboteadores|gru|fsb|svr|infiltrado|infiltrados|traicion|alta traicion|treason|pro-ruso|prorruso|pro-rusos|prorrusos|agente ruso|agentes rusos)\b'
+    return bool(re.search(patron_det, t_all)) and bool(re.search(patron_actor_espia, t_all))
 
 def es_cripto(titular, cuerpo):
     t_all = normalizar_texto(f"{titular} {cuerpo}")
@@ -290,6 +291,10 @@ def generar_analisis_contexto(categoria, canal=""):
     canal_clean = canal.replace("@", "")
     if canal_clean in CANALES_DESINFORMACION_ESP:
         return "Canal clasificado en la red de propaganda, desinformación e injerencia extranjera (FIMI) vinculada al ecosistema pro-Kremlin."
+    if "rybar" in canal_clean.lower() or "zvinchuk" in canal_clean.lower():
+        return "Análisis de Mijaíl Zvinchuk (@Rybar): canal de inteligencia táctica y propaganda militar rusa de alta difusión."
+    if categoria == "DETENCION":
+        return "Operación policial y contrainteligencia: neutralización y arresto de espías, saboteadores o colaboradores vinculados a la inteligencia rusa (GRU/FSB/SVR)."
     if categoria == "REDES":
         return "Contenido capturado en redes sociales, canales de análisis en YouTube y cuentas de seguimiento del conflicto ruso-ucraniano."
     if categoria == "CRIMENES":
@@ -300,8 +305,6 @@ def generar_analisis_contexto(categoria, canal=""):
         return "Impacto directo en la seguridad nacional e infraestructuras críticas de España frente a operaciones hostiles."
     if categoria == "CRIPTO":
         return "Inteligencia financiera (FININT): evasión de sanciones internacionales y uso de criptoactivos (USDT, BTC)."
-    if categoria == "DETENCION":
-        return "Operaciones policiales y contrainteligencia frente a redes del GRU/FSB/SVR o agentes de sabotaje."
     if categoria == "TELEGRAM":
         return "Reporte capturado de canales tácticos en Telegram: inteligencia operativa de primera línea."
     return "Actividad vinculada a operaciones híbridas globales del Kremlin: ciberataques, sabotaje o desinformación."
@@ -365,7 +368,7 @@ def barrido_canales_youtube():
     return todas
 
 # ==========================================
-# RASTREADOR TELEGRAM
+# RASTREADOR TELEGRAM (CON MIJAÍL ZVINCHUK / RYBAR)
 # ==========================================
 def raspar_un_canal_tg(canal):
     mensajes = []
@@ -376,7 +379,6 @@ def raspar_un_canal_tg(canal):
         soup = BeautifulSoup(r.text, "html.parser")
         posts = soup.find_all("div", class_="tgme_widget_message_wrap")
 
-        # El canal de Anatolii Sharij se cataloga en REDES
         es_red_social = (canal == "ASupersharij")
 
         for p in posts[-35:]:
@@ -432,10 +434,14 @@ def raspar_un_canal_tg(canal):
             primera_frase = re.split(r'(?<=[.!?])\s+', texto_sin_urls)[0]
             tit_corto = primera_frase if 20 <= len(primera_frase) <= 160 else texto_sin_urls[:140]
 
+            nombre_canal_visual = f"@{canal}"
+            if canal.lower() == "rybar":
+                nombre_canal_visual = "@rybar (Mijaíl Zvinchuk)"
+
             mensajes.append({
                 "id": f"TG-{hash(link)}",
                 "plataforma": "REDES" if es_red_social else "TELEGRAM",
-                "canal": f"Telegram: @{canal}" if es_red_social else f"@{canal}",
+                "canal": f"Telegram: @{canal}" if es_red_social else nombre_canal_visual,
                 "fecha_dt": dt_obj,
                 "titular_raw": tit_corto,
                 "cuerpo_raw": texto_sin_urls[:2200],
@@ -449,8 +455,9 @@ def raspar_un_canal_tg(canal):
 
 def raspar_telegram_masivo():
     canales = [
+        "rybar",  # Mijaíl Zvinchuk
         "DIUkraine", "SBUkr", "informnapalm", "cyberresistanceua",
-        "entre_guerras", "rybar", "dva_majors", "vchkogpu",
+        "entre_guerras", "dva_majors", "vchkogpu",
         "meduzalive", "astrapress", "istories_media",
         "ostorozhno_novosti", "nvua_official", "operativnoZSU",
         "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu",
@@ -538,7 +545,7 @@ def raspar_antikor():
     return items
 
 # ==========================================
-# RECOLECTOR RSS PRENSA
+# RECOLECTOR RSS PRENSA (CON THE OBJECTIVE)
 # ==========================================
 def procesar_un_feed_rss(datos_feed):
     url, etiqueta = datos_feed
@@ -588,19 +595,21 @@ def procesar_un_feed_rss(datos_feed):
 
 def barrido_prensa_multilingue():
     fuentes_rss = [
+        # The Objective (específico y Google News directo de The Objective)
+        ("https://theobjective.com/feed/", "The Objective (Feed)"),
+        ("https://news.google.com/rss/search?q=site:theobjective.com+(Rusia+OR+ruso+OR+espia+OR+sabotaje+OR+ciberataque+OR+CNI)&hl=es&gl=ES&ceid=ES:es", "The Objective (España)"),
+        # Cobertura España y Seguridad
         ("https://news.google.com/rss/search?q=(Rusia+OR+ruso+OR+Kremlin+OR+NoName057+OR+APT28)+(España+OR+Madrid+OR+CNI+OR+INCIBE)+(sabotaje+OR+ciberataque+OR+espionaje+OR+amenaza)&hl=es&gl=ES&ceid=ES:es", "España Seguridad (ES)"),
         ("https://news.google.com/rss/search?q=(Russia+OR+Russian+OR+Kremlin)+(Spain+OR+Madrid)+(sabotage+OR+cyberattack+OR+spy+OR+espionage)&hl=en-US&gl=US&ceid=US:en", "Spain Watch (EN)"),
         ("https://news.google.com/rss/search?q=(Indra+OR+Navantia+OR+Escribano+OR+Sener+OR+Telefónica+OR+Iberdrola)+(Rusia+OR+ciberataque+OR+sabotaje+OR+hackers)&hl=es&gl=ES&ceid=ES:es", "Empresas España (ES)"),
+        # Detenciones por espionaje/sabotaje
+        ("https://news.google.com/rss/search?q=(detenido+OR+arrestado+OR+detencion)+(espia+ruso+OR+sabotaje+ruso+OR+GRU+OR+FSB+OR+SVR)&hl=es&gl=ES&ceid=ES:es", "Detenciones (ES)"),
+        ("https://news.google.com/rss/search?q=(arrested+OR+detained)+(Russian+spy+OR+Russian+sabotage+OR+GRU+OR+FSB)&hl=en-US&gl=US&ceid=US:en", "Detenciones (EN)"),
+        # Inteligencia global y crímenes
         ("https://news.google.com/rss/search?q=(Russia+OR+Ukraine)+(sabotage+OR+cyberattack+OR+espionage+OR+\"hybrid+warfare\"+OR+partisan)&hl=en-US&gl=US&ceid=US:en", "Intel Global (EN)"),
         ("https://news.google.com/rss/search?q=(Rusia+OR+Ucrania)+(sabotaje+OR+ciberataque+OR+espionaje+OR+\"guerra+hibrida\")&hl=es&gl=ES&ceid=ES:es", "Frente Global (ES)"),
-        ("https://news.google.com/rss/search?q=(Russland+OR+Ukraine)+(Sabotage+OR+Spionage+OR+Cyberangriff)&hl=de&gl=DE&ceid=DE:de", "Intel Europa Central (DE)"),
-        ("https://news.google.com/rss/search?q=(Russie+OR+Ukraine)+(sabotage+OR+espionnage+OR+cyberattaque)&hl=fr&gl=FR&ceid=FR:fr", "Intel Europa (FR)"),
         ("https://news.google.com/rss/search?q=(crypto+OR+bitcoin+OR+USDT+OR+Tether)+(Russia+OR+sanctions+OR+Garantex)&hl=en-US&gl=US&ceid=US:en", "FININT Cripto (EN)"),
-        ("https://news.google.com/rss/search?q=(criptomonedas+OR+Bitcoin+OR+USDT)+(Rusia+OR+sanciones+OR+Garantex)&hl=es&gl=ES&ceid=ES:es", "FININT Cripto (ES)"),
-        ("https://news.google.com/rss/search?q=(arrested+OR+detained)+(Russian+spy+OR+Russian+sabotage+OR+GRU+OR+FSB)&hl=en-US&gl=US&ceid=US:en", "Detenciones (EN)"),
-        ("https://news.google.com/rss/search?q=(detenido+OR+arrestado)+(espia+ruso+OR+sabotaje+ruso+OR+GRU+OR+FSB)&hl=es&gl=ES&ceid=ES:es", "Detenciones (ES)"),
-        ("https://news.google.com/rss/search?q=(Rusia+OR+Putin+OR+Ucrania)+(\"crimenes+de+guerra\"+OR+\"crimen+de+guerra\"+OR+\"Corte+Penal+Internacional\")&hl=es&gl=ES&ceid=ES:es", "Crímenes Guerra (ES)"),
-        ("https://news.google.com/rss/search?q=(Russia+OR+Ukraine)+(\"war+crimes\"+OR+\"war+crime\"+OR+ICC)&hl=en-US&gl=US&ceid=US:en", "War Crimes (EN)")
+        ("https://news.google.com/rss/search?q=(Rusia+OR+Putin+OR+Ucrania)+(\"crimenes+de+guerra\"+OR+\"crimen+de+guerra\"+OR+\"Corte+Penal+Internacional\")&hl=es&gl=ES&ceid=ES:es", "Crímenes Guerra (ES)")
     ]
     todas = []
     with ThreadPoolExecutor(max_workers=10) as ex:
@@ -613,7 +622,7 @@ def barrido_prensa_multilingue():
     return todas
 
 # ==========================================
-# ACTUALIZACIÓN CENTRAL
+# ACTUALIZACIÓN CENTRAL Y CLASIFICACIÓN
 # ==========================================
 def son_mismo_evento(tit1, tit2):
     t1 = normalizar_texto(limpiar_firma_medio(re.sub(r'\[.*?\]', '', tit1)))
@@ -623,7 +632,7 @@ def son_mismo_evento(tit1, tit2):
     return SequenceMatcher(None, t1[:95], t2[:95]).ratio() > 0.68
 
 def ejecutar_actualizacion_total():
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    with ThreadPoolExecutor(max_workers=5) as ex:
         f_prensa = ex.submit(barrido_prensa_multilingue)
         f_tg = ex.submit(raspar_telegram_masivo)
         f_yt = ex.submit(barrido_canales_youtube)
@@ -680,16 +689,17 @@ def ejecutar_actualizacion_total():
             titular_final = tit_es
             tit_sin_medio = limpiar_firma_medio(titular_final)
 
-            if es_crimen_guerra(tit_sin_medio, cuerpo_intacto):
-                cat_final = "CRIMENES"
-            elif es_detencion(tit_sin_medio, cuerpo_intacto):
+            # ORDEN DE CLASIFICACIÓN CORREGIDO: Detenciones evaluadas con prioridad para que no caigan en GLOBAL
+            if es_detencion(tit_sin_medio, cuerpo_intacto):
                 cat_final = "DETENCION"
-            elif es_cripto(tit_sin_medio, cuerpo_intacto):
-                cat_final = "CRIPTO"
+            elif es_crimen_guerra(tit_sin_medio, cuerpo_intacto):
+                cat_final = "CRIMENES"
             elif es_empresa_esp(tit_sin_medio, cuerpo_intacto):
                 cat_final = "EMPRESA"
             elif es_espana(tit_sin_medio, cuerpo_intacto):
                 cat_final = "ESPANA"
+            elif es_cripto(tit_sin_medio, cuerpo_intacto):
+                cat_final = "CRIPTO"
             else:
                 cat_final = "GLOBAL"
 
@@ -751,10 +761,10 @@ def exportar_alertas_csv(alertas):
 SECCIONES_INFORME = [
     ("ESPANA", "SECCIÓN 1: ESPAÑA E INFRAESTRUCTURAS CRÍTICAS", "#dc2626"),
     ("EMPRESA", "SECCIÓN 2: EMPRESAS ESTRATÉGICAS DE ESPAÑA Y DEFENSA", "#d97706"),
-    ("GLOBAL", "SECCIÓN 3: RUSIA, UCRANIA Y AMENAZAS GLOBALES", "#0f172a"),
-    ("CRIMENES", "SECCIÓN 4: CRÍMENES DE GUERRA Y DERECHOS HUMANOS", "#991b1b"),
-    ("CRIPTO", "SECCIÓN 5: CRIPTOACTIVOS Y FINANCIACIÓN ILÍCITA", "#7c3aed"),
-    ("DETENCION", "SECCIÓN 6: DETENCIONES POR ESPIONAJE Y SABOTAJE", "#be123c"),
+    ("DETENCION", "SECCIÓN 3: DETENCIONES POR ESPIONAJE Y SABOTAJE", "#be123c"),
+    ("GLOBAL", "SECCIÓN 4: RUSIA, UCRANIA Y AMENAZAS GLOBALES", "#0f172a"),
+    ("CRIMENES", "SECCIÓN 5: CRÍMENES DE GUERRA Y DERECHOS HUMANOS", "#991b1b"),
+    ("CRIPTO", "SECCIÓN 6: CRIPTOACTIVOS Y FINANCIACIÓN ILÍCITA", "#7c3aed"),
     ("TELEGRAM", "SECCIÓN 7: TELEGRAM OSINT Y CANALES TÁCTICOS", "#0284c7"),
     ("REDES", "SECCIÓN 8: REDES SOCIALES Y ANÁLISIS MULTIMEDIA", "#059669")
 ]
@@ -918,10 +928,10 @@ st.markdown("""
     }
     button[data-baseweb="tab"]:nth-child(1) { background-color: #dc2626 !important; }
     button[data-baseweb="tab"]:nth-child(2) { background-color: #d97706 !important; }
-    button[data-baseweb="tab"]:nth-child(3) { background-color: #1e293b !important; }
-    button[data-baseweb="tab"]:nth-child(4) { background-color: #991b1b !important; }
-    button[data-baseweb="tab"]:nth-child(5) { background-color: #7c3aed !important; }
-    button[data-baseweb="tab"]:nth-child(6) { background-color: #be123c !important; }
+    button[data-baseweb="tab"]:nth-child(3) { background-color: #be123c !important; }
+    button[data-baseweb="tab"]:nth-child(4) { background-color: #1e293b !important; }
+    button[data-baseweb="tab"]:nth-child(5) { background-color: #991b1b !important; }
+    button[data-baseweb="tab"]:nth-child(6) { background-color: #7c3aed !important; }
     button[data-baseweb="tab"]:nth-child(7) { background-color: #0284c7 !important; }
     button[data-baseweb="tab"]:nth-child(8) { background-color: #059669 !important; }
 
@@ -979,7 +989,7 @@ alertas_totales = st.session_state.get("alertas_monitor", [])
 # ==========================================
 with st.sidebar:
     st.subheader("🔍 Filtros de Búsqueda")
-    busqueda_txt = st.text_input("Filtrar por texto:", placeholder="Ej: Indra, dron, sabotaje...")
+    busqueda_txt = st.text_input("Filtrar por texto:", placeholder="Ej: Indra, Zvinchuk, The Objective...")
     
     canales_disponibles = sorted(list({a["canal"] for a in alertas_totales}))
     canales_sel = st.multiselect("Filtrar por canal/fuente:", canales_disponibles, default=[])
@@ -1133,25 +1143,25 @@ def renderizar_tarjetas(lista_items):
             st.markdown(tarjeta_html, unsafe_allow_html=True)
 
 # ==========================================
-# PESTAÑAS (REDES SOCIALES COMO ÚLTIMA PESTAÑA)
+# PESTAÑAS (ORDEN PRIORITARIO CON DETENCIONES EN 3ª)
 # ==========================================
 if "alertas_monitor" in st.session_state:
     l_esp = [x for x in datos_activos if x.get("categoria") == "ESPANA"]
     l_emp = [x for x in datos_activos if x.get("categoria") == "EMPRESA"]
+    l_det = [x for x in datos_activos if x.get("categoria") == "DETENCION"]
     l_prensa = [x for x in datos_activos if x.get("categoria") == "GLOBAL"]
     l_crim = [x for x in datos_activos if x.get("categoria") == "CRIMENES"]
     l_cripto = [x for x in datos_activos if x.get("categoria") == "CRIPTO"]
-    l_det = [x for x in datos_activos if x.get("categoria") == "DETENCION"]
     l_tg = [x for x in datos_activos if x.get("categoria") == "TELEGRAM"]
     l_redes = [x for x in datos_activos if x.get("categoria") == "REDES"]
 
     t1, t2, t3, t4, t5, t6, t7, t8 = st.tabs([
         f"🇪🇸 ESPAÑA ({len(l_esp)})",
         f"🏢 EMPRESAS ({len(l_emp)})",
+        f"🛑 DETENCIONES ({len(l_det)})",
         f"📰 GLOBAL ({len(l_prensa)})",
         f"⚖️ CRÍMENES GUERRA ({len(l_crim)})",
         f"🟣 CRIPTO ({len(l_cripto)})",
-        f"🛑 DETENCIONES ({len(l_det)})",
         f"✈️ TELEGRAM ({len(l_tg)})",
         f"🌐 REDES SOCIALES ({len(l_redes)})"
     ])
@@ -1160,13 +1170,13 @@ if "alertas_monitor" in st.session_state:
     with t2:
         renderizar_tarjetas(l_emp)
     with t3:
-        renderizar_tarjetas(l_prensa)
-    with t4:
-        renderizar_tarjetas(l_crim)
-    with t5:
-        renderizar_tarjetas(l_cripto)
-    with t6:
         renderizar_tarjetas(l_det)
+    with t4:
+        renderizar_tarjetas(l_prensa)
+    with t5:
+        renderizar_tarjetas(l_crim)
+    with t6:
+        renderizar_tarjetas(l_cripto)
     with t7:
         renderizar_tarjetas(l_tg)
     with t8:
