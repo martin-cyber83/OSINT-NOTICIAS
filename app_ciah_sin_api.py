@@ -238,17 +238,23 @@ def tiene_vector_amenaza_estricto(texto):
     ]
     return any(v in t_norm for v in vectores_latinos)
 
+# ==========================================
+# CATEGORIZACIÓN CORREGIDA (DETENCIONES INFALIBLES)
+# ==========================================
+
+def es_detencion(titular, cuerpo):
+    """
+    Versión infalible: Como la noticia ya ha superado el filtro de vinculación rusa 
+    y vector de amenaza, cualquier mención a acción policial o judicial la clasifica aquí.
+    """
+    t_all = normalizar_texto(f"{titular} {cuerpo}")
+    patron_det = r'\b(detenido|detenida|detenidos|detenidas|detencion|detenciones|arrestado|arrestada|arrestados|arrestadas|arresto|arrestos|arrested|detained|festnahme|verhaftet|capturado|capturados|desarticulad|prision|carcel|condenado|condenada)\b'
+    return bool(re.search(patron_det, t_all))
+
 def es_crimen_guerra(titular, cuerpo):
     t_all = normalizar_texto(f"{titular} {cuerpo}")
     patron = r'\b(crimen de guerra|crimenes de guerra|war crime|war crimes|corte penal internacional|tribunal penal|lesa humanidad|genocidio|pow execution|tortura|bucha|mariupol|fosa comun|ejecucion de prisioneros)\b'
     return bool(re.search(patron, t_all))
-
-# DETENCIONES BLINDADAS (NO SE DESVÍA A GLOBAL)
-def es_detencion(titular, cuerpo):
-    t_all = normalizar_texto(f"{titular} {cuerpo}")
-    patron_det = r'\b(detenido|detenida|detenidos|detenidas|detencion|detenciones|arrestado|arrestada|arrestados|arrestadas|arresto|arrestos|arrested|detained|festnahme|verhaftet|capturado|esposado|prision provisional|prision preventiva)\b'
-    patron_actor_espia = r'\b(espia|espias|spy|spies|espionage|espionaje|spying|sabotaje|sabotage|saboteador|saboteadores|gru|fsb|svr|infiltrado|infiltrados|traicion|alta traicion|treason|pro-ruso|prorruso|pro-rusos|prorrusos|agente ruso|agentes rusos)\b'
-    return bool(re.search(patron_det, t_all)) and bool(re.search(patron_actor_espia, t_all))
 
 def es_cripto(titular, cuerpo):
     t_all = normalizar_texto(f"{titular} {cuerpo}")
@@ -292,9 +298,7 @@ def generar_analisis_contexto(categoria, canal=""):
     if canal_clean in CANALES_DESINFORMACION_ESP:
         return "Canal clasificado en la red de propaganda, desinformación e injerencia extranjera (FIMI) vinculada al ecosistema pro-Kremlin."
     if "rybar" in canal_clean.lower() or "zvinchuk" in canal_clean.lower():
-        return "Análisis de Mijaíl Zvinchuk (@Rybar): canal de inteligencia táctica y propaganda militar rusa de alta difusión."
-    if categoria == "DETENCION":
-        return "Operación policial y contrainteligencia: neutralización y arresto de espías, saboteadores o colaboradores vinculados a la inteligencia rusa (GRU/FSB/SVR)."
+        return "Análisis de Mijaíl Zvinchuk (@rybar): canal de inteligencia táctica y propaganda militar rusa de alta difusión."
     if categoria == "REDES":
         return "Contenido capturado en redes sociales, canales de análisis en YouTube y cuentas de seguimiento del conflicto ruso-ucraniano."
     if categoria == "CRIMENES":
@@ -305,6 +309,8 @@ def generar_analisis_contexto(categoria, canal=""):
         return "Impacto directo en la seguridad nacional e infraestructuras críticas de España frente a operaciones hostiles."
     if categoria == "CRIPTO":
         return "Inteligencia financiera (FININT): evasión de sanciones internacionales y uso de criptoactivos (USDT, BTC)."
+    if categoria == "DETENCION":
+        return "Operaciones policiales y contrainteligencia: neutralización y arresto de espías, saboteadores o colaboradores vinculados a la inteligencia rusa."
     if categoria == "TELEGRAM":
         return "Reporte capturado de canales tácticos en Telegram: inteligencia operativa de primera línea."
     return "Actividad vinculada a operaciones híbridas globales del Kremlin: ciberataques, sabotaje o desinformación."
@@ -434,9 +440,10 @@ def raspar_un_canal_tg(canal):
             primera_frase = re.split(r'(?<=[.!?])\s+', texto_sin_urls)[0]
             tit_corto = primera_frase if 20 <= len(primera_frase) <= 160 else texto_sin_urls[:140]
 
+            # Identificador especial para Mijaíl Zvinchuk
             nombre_canal_visual = f"@{canal}"
             if canal.lower() == "rybar":
-                nombre_canal_visual = "@rybar (Mijaíl Zvinchuk)"
+                nombre_canal_visual = "Mijaíl Zvinchuk (@rybar)"
 
             mensajes.append({
                 "id": f"TG-{hash(link)}",
@@ -595,17 +602,20 @@ def procesar_un_feed_rss(datos_feed):
 
 def barrido_prensa_multilingue():
     fuentes_rss = [
-        # The Objective (específico y Google News directo de The Objective)
-        ("https://theobjective.com/feed/", "The Objective (Feed)"),
-        ("https://news.google.com/rss/search?q=site:theobjective.com+(Rusia+OR+ruso+OR+espia+OR+sabotaje+OR+ciberataque+OR+CNI)&hl=es&gl=ES&ceid=ES:es", "The Objective (España)"),
+        # Nuevas fuentes directas de The Objective
+        ("https://theobjective.com/espana/feed/", "The Objective (España)"),
+        ("https://theobjective.com/internacional/feed/", "The Objective (Internacional)"),
+        
         # Cobertura España y Seguridad
         ("https://news.google.com/rss/search?q=(Rusia+OR+ruso+OR+Kremlin+OR+NoName057+OR+APT28)+(España+OR+Madrid+OR+CNI+OR+INCIBE)+(sabotaje+OR+ciberataque+OR+espionaje+OR+amenaza)&hl=es&gl=ES&ceid=ES:es", "España Seguridad (ES)"),
         ("https://news.google.com/rss/search?q=(Russia+OR+Russian+OR+Kremlin)+(Spain+OR+Madrid)+(sabotage+OR+cyberattack+OR+spy+OR+espionage)&hl=en-US&gl=US&ceid=US:en", "Spain Watch (EN)"),
         ("https://news.google.com/rss/search?q=(Indra+OR+Navantia+OR+Escribano+OR+Sener+OR+Telefónica+OR+Iberdrola)+(Rusia+OR+ciberataque+OR+sabotaje+OR+hackers)&hl=es&gl=ES&ceid=ES:es", "Empresas España (ES)"),
-        # Detenciones por espionaje/sabotaje
+        
+        # Detenciones
         ("https://news.google.com/rss/search?q=(detenido+OR+arrestado+OR+detencion)+(espia+ruso+OR+sabotaje+ruso+OR+GRU+OR+FSB+OR+SVR)&hl=es&gl=ES&ceid=ES:es", "Detenciones (ES)"),
         ("https://news.google.com/rss/search?q=(arrested+OR+detained)+(Russian+spy+OR+Russian+sabotage+OR+GRU+OR+FSB)&hl=en-US&gl=US&ceid=US:en", "Detenciones (EN)"),
-        # Inteligencia global y crímenes
+        
+        # Global
         ("https://news.google.com/rss/search?q=(Russia+OR+Ukraine)+(sabotage+OR+cyberattack+OR+espionage+OR+\"hybrid+warfare\"+OR+partisan)&hl=en-US&gl=US&ceid=US:en", "Intel Global (EN)"),
         ("https://news.google.com/rss/search?q=(Rusia+OR+Ucrania)+(sabotaje+OR+ciberataque+OR+espionaje+OR+\"guerra+hibrida\")&hl=es&gl=ES&ceid=ES:es", "Frente Global (ES)"),
         ("https://news.google.com/rss/search?q=(crypto+OR+bitcoin+OR+USDT+OR+Tether)+(Russia+OR+sanctions+OR+Garantex)&hl=en-US&gl=US&ceid=US:en", "FININT Cripto (EN)"),
@@ -689,7 +699,7 @@ def ejecutar_actualizacion_total():
             titular_final = tit_es
             tit_sin_medio = limpiar_firma_medio(titular_final)
 
-            # ORDEN DE CLASIFICACIÓN CORREGIDO: Detenciones evaluadas con prioridad para que no caigan en GLOBAL
+            # ORDEN CORREGIDO: Las detenciones se evalúan primero con su nueva regla infalible
             if es_detencion(tit_sin_medio, cuerpo_intacto):
                 cat_final = "DETENCION"
             elif es_crimen_guerra(tit_sin_medio, cuerpo_intacto):
