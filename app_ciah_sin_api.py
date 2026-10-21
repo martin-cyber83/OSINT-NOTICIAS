@@ -232,11 +232,12 @@ def tiene_vector_amenaza_estricto(texto):
         "desinformacion", "disinformation", "propaganda", "injerencia", "fimi",
         "cripto", "crypto", "bitcoin", "btc", "usdt", "tether", "garantex", "sancion", "sanction", "elusion",
         "flota fantasma", "shadow fleet", "cable submarino", "undersea cable", "petrolero",
-        "crimen de guerra", "war crime", "corte penal internacional", "icc", "genocidio", "tortura", "pow execution",
-        "ejecucion", "masacre", "fosa comun", "bucha", "mariupol", "ataque a civiles", "hospital", "escuela",
-        "deportacion", "ninos ucranianos", "detenido", "detencion", "arrestado", "arresto", "arrested", "detained",
-        "dron", "uav", "guerra electronica", "jamming", "arson", "incendio provocado", "guerra", "ejercito", "militar",
-        "otan", "nato", "frente", "misil", "ataque", "ofensiva", "bombardeo", "shariy", "sharij", "rybar", "zvinchuk"
+        "crimen de guerra", "crimenes de guerra", "war crime", "war crimes", "corte penal internacional", "icc",
+        "genocidio", "tortura", "pow execution", "ejecucion", "masacre", "fosa comun", "bucha", "mariupol",
+        "ataque civil", "ataque a civiles", "hospital", "escuela", "deportacion", "ninos ucranianos",
+        "detenido", "detencion", "arrestado", "arresto", "arrested", "detained", "dron", "uav", "guerra electronica",
+        "jamming", "arson", "incendio provocado", "guerra", "ejercito", "militar", "otan", "nato", "frente", "misil",
+        "ataque", "ofensiva", "bombardeo", "shariy", "sharij", "rybar", "zvinchuk"
     ]
     return any(v in t_norm for v in vectores_latinos)
 
@@ -248,10 +249,12 @@ def es_crimen_guerra(titular, cuerpo):
     patron = r'\b(' \
              r'crimen de guerra|crimenes de guerra|war crime|war crimes|' \
              r'corte penal internacional|tribunal penal|cpi|icc|la haya|the hague|' \
-             r'lesa humanidad|genocidio|pow execution|tortura|torturas|' \
-             r'bucha|mariupol|fosa comun|fosas comunes|ejecucion de prisioneros|' \
-             r'deportacion de menores|deportacion forzada|deportacion de ninos|' \
-             r'ataque a civiles|bombardeo de hospital|bombardeo de civiles|masacre' \
+             r'lesa humanidad|genocidio|pow execution|ejecucion de prisioneros|' \
+             r'tortura|torturas|fosa comun|fosas comunes|masacre|bucha|irpin|izium|mariupol|' \
+             r'deportacion|menores deportados|ninos robados|' \
+             r'ataque a civiles|ataque contra civiles|civiles muertos|muerte de civiles|' \
+             r'bombardeo de hospital|bombardeo residencial|edificio de viviendas|edificio residencial|' \
+             r'escuela bombardeada|hospital infantil|bloque de apartamentos' \
              r')\b'
     return bool(re.search(patron, t_all))
 
@@ -561,7 +564,7 @@ def raspar_antikor():
     return items
 
 # ==========================================
-# RECOLECTOR RSS PRENSA (CON THE OBJECTIVE)
+# RECOLECTOR RSS PRENSA (THE OBJECTIVE + CRÍMENES REFORZADOS)
 # ==========================================
 def procesar_un_feed_rss(datos_feed):
     url, etiqueta = datos_feed
@@ -625,9 +628,11 @@ def barrido_prensa_multilingue():
         ("https://news.google.com/rss/search?q=(detenido+OR+arrestado+OR+detencion)+(espia+ruso+OR+sabotaje+ruso+OR+GRU+OR+FSB+OR+SVR)&hl=es&gl=ES&ceid=ES:es", "Detenciones (ES)"),
         ("https://news.google.com/rss/search?q=(arrested+OR+detained)+(Russian+spy+OR+Russian+sabotage+OR+GRU+OR+FSB)&hl=en-US&gl=US&ceid=US:en", "Detenciones (EN)"),
 
-        # Crímenes de Guerra
-        ("https://news.google.com/rss/search?q=(Rusia+OR+Putin+OR+tropas+rusas)+(\"crimenes+de+guerra\"+OR+\"crimen+de+guerra\"+OR+\"Corte+Penal+Internacional\"+OR+\"ataque+a+civiles\"+OR+\"deportacion+de+ninos\"+OR+\"fosa+comun\")&hl=es&gl=ES&ceid=ES:es", "Crímenes Guerra (ES)"),
-        ("https://news.google.com/rss/search?q=(Russia+OR+Russian+forces)+(\"war+crimes\"+OR+\"war+crime\"+OR+ICC+OR+\"civilian+attacks\"+OR+\"massacre\"+OR+\"POW+execution\")&hl=en-US&gl=US&ceid=US:en", "War Crimes Watch (EN)"),
+        # Crímenes de Guerra, Ataques a Civiles y DDHH ampliado
+        ("https://news.google.com/rss/search?q=(Rusia+OR+ruso+OR+tropas+rusas)+(\"crimen+de+guerra\"+OR+\"crimenes+de+guerra\"+OR+\"Corte+Penal\"+OR+\"ataque+a+civiles\"+OR+\"bombardeo+residencial\"+OR+\"prisioneros\")&hl=es&gl=ES&ceid=ES:es", "Crímenes Guerra (ES)"),
+        ("https://news.google.com/rss/search?q=(Russia+OR+Russian+forces)+(\"war+crime\"+OR+\"war+crimes\"+OR+ICC+OR+\"civilian+casualties\"+OR+\"hospital+strike\"+OR+\"POW+execution\")&hl=en-US&gl=US&ceid=US:en", "War Crimes (EN)"),
+        ("https://news.google.com/rss/search?q=(Rusia+OR+Ucrania)+(\"ejecucion\"+OR+\"tortura\"+OR+\"fosa+comun\"+OR+\"deportacion\")+civiles&hl=es&gl=ES&ceid=ES:es", "DDHH Conflicto (ES)"),
+        ("https://news.google.com/rss/search?q=(Rusia+OR+Russian)+Ukraine+(\"strike+on+civilians\"+OR+\"residential+building\"+OR+\"massacre\")&hl=en-US&gl=US&ceid=US:en", "Civilian Strikes (EN)"),
 
         # Inteligencia global y FININT
         ("https://news.google.com/rss/search?q=(Russia+OR+Ukraine)+(sabotage+OR+cyberattack+OR+espionage+OR+\"hybrid+warfare\"+OR+partisan)&hl=en-US&gl=US&ceid=US:en", "Intel Global (EN)"),
@@ -719,10 +724,10 @@ def ejecutar_actualizacion_total():
                 cat_final = "EMPRESA"
             elif es_espana(tit_sin_medio, cuerpo_intacto):
                 cat_final = "ESPANA"
-            elif es_detencion(tit_sin_medio, cuerpo_intacto):
-                cat_final = "DETENCION"
             elif es_crimen_guerra(tit_sin_medio, cuerpo_intacto):
                 cat_final = "CRIMENES"
+            elif es_detencion(tit_sin_medio, cuerpo_intacto):
+                cat_final = "DETENCION"
             elif es_cripto(tit_sin_medio, cuerpo_intacto):
                 cat_final = "CRIPTO"
             else:
