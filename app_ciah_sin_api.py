@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -11,6 +12,7 @@ import html as html_module
 from email.utils import parsedate_to_datetime
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 from difflib import SequenceMatcher
 from urllib.parse import urlparse, urlunparse
 import pandas as pd
@@ -27,24 +29,68 @@ st.set_page_config(
 )
 
 # ==========================================
-# BLINDAJE VISUAL: OCULTAR GITHUB, PERFIL Y MENÚS
+# BLINDAJE TOTAL ANTI-GITHUB Y PERFIL (CSS + JS)
 # ==========================================
 st.markdown("""
 <style>
-    #MainMenu {visibility: hidden !important; display: none !important;}
-    header {visibility: hidden !important; display: none !important;}
-    footer {visibility: hidden !important; display: none !important;}
-    .viewerBadge_container__1QSob,
-    [data-testid="stStatusWidget"],
-    .viewerBadge_link__1QSob,
-    div[class*="viewerBadge"],
-    div[class*="stDecoration"],
-    div[class*="stToolbar"] {
+    /* 1. Ocultar cabecera, menú superior y pie de página nativos */
+    #MainMenu, header, footer {
         visibility: hidden !important;
         display: none !important;
+        height: 0px !important;
+    }
+    
+    /* 2. Ocultar cualquier badge, contenedor de perfil o enlace a GitHub / Streamlit Cloud */
+    [data-testid="stToolbar"],
+    [data-testid="stDecoration"],
+    [data-testid="stStatusWidget"],
+    [data-testid="manage-app-button"],
+    .viewerBadge_container__1QSob,
+    .viewerBadge_link__1QSob,
+    .viewerBadge_text__1JaDK,
+    div[class*="viewerBadge"],
+    div[class*="profileContainer"],
+    div[class*=" profilePreview"],
+    a[href*="github.com"],
+    a[href*="streamlit.io/cloud"] {
+        visibility: hidden !important;
+        display: none !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+        width: 0 !important;
+        height: 0 !important;
     }
 </style>
 """, unsafe_allow_html=True)
+
+# Script JS silencioso para destruir del DOM cualquier insignia flotante de perfil en Streamlit Cloud
+components.html("""
+<script>
+    const cleanProfileBadges = () => {
+        try {
+            const parentDoc = window.parent.document;
+            const selectors = [
+                'a[href*="github.com"]',
+                'div[class*="viewerBadge"]',
+                'div[class*="profileContainer"]',
+                '[data-testid="manage-app-button"]',
+                'footer'
+            ];
+            selectors.forEach(sel => {
+                parentDoc.querySelectorAll(sel).forEach(el => {
+                    // No borrar enlaces dentro de nuestras tarjetas de noticias OSINT
+                    if (!el.closest('.osint-card')) {
+                        el.style.display = 'none';
+                        el.remove();
+                    }
+                });
+            });
+        } catch (e) {}
+    };
+    cleanProfileBadges();
+    setInterval(cleanProfileBadges, 1500);
+</script>
+""", height=0, width=0)
 
 # ==========================================
 # CONTROL DE ACCESO CON RECORDATORIO (CLAVE: GAD2026)
@@ -61,7 +107,7 @@ def gestionar_acceso():
         return True
 
     st.markdown("""
-        <div style="max-width: 460px; margin: 40px auto 20px auto; padding: 25px; background: #0f172a; border-radius: 8px; border-left: 6px solid #dc2626; color: white;">
+        <div style="max-width: 460px; margin: 40px auto 20px auto; padding: 25px; background: #0f172a; border-radius: 10px; border-left: 6px solid #dc2626; color: white; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
             <h2 style="margin-top: 0; color: #ffffff; font-size: 20px;">🔒 Acceso Restringido</h2>
             <p style="color: #94a3b8; font-size: 13.5px; margin-bottom: 0;">Sistema de Inteligencia de Amenazas Híbridas (OSINT). Introduzca la credencial autorizada para continuar.</p>
         </div>
@@ -89,7 +135,7 @@ if not gestionar_acceso():
     st.stop()
 
 # ==========================================
-# SESIÓN HTTP OPTIMIZADA
+# SESIÓN HTTP OPTIMIZADA Y THREAD-SAFE
 # ==========================================
 SESION_HTTP = requests.Session()
 retries = Retry(total=1, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
@@ -102,6 +148,7 @@ SESION_HTTP.headers.update({
 })
 
 CACHE_TITULARES_GLOBAL = {}
+CACHE_LOCK = threading.Lock()
 
 # ==========================================
 # FUNCIONES DE LIMPIEZA Y FECHAS
@@ -187,7 +234,7 @@ def decodificar_url_google_news_offline(url_rss):
     return url_rss
 
 # ==========================================
-# TRADUCTOR MULTI-HILO ULTRA RÁPIDO
+# TRADUCTOR MULTI-HILO CON BLOQUEO SEGURO (THREAD-SAFE)
 # ==========================================
 def traducir_un_titular_individual(titular_orig):
     if not titular_orig:
@@ -196,8 +243,9 @@ def traducir_un_titular_individual(titular_orig):
     if len(t_clean) < 4:
         return t_clean
 
-    if t_clean in CACHE_TITULARES_GLOBAL:
-        return CACHE_TITULARES_GLOBAL[t_clean]
+    with CACHE_LOCK:
+        if t_clean in CACHE_TITULARES_GLOBAL:
+            return CACHE_TITULARES_GLOBAL[t_clean]
 
     medio_suffix = ""
     texto_a_traducir = t_clean
@@ -217,12 +265,14 @@ def traducir_un_titular_individual(titular_orig):
                 trad = limpiar_html_texto("".join(partes))
                 if len(trad) > 3:
                     resultado = f"{trad}{medio_suffix}" if medio_suffix else trad
-                    CACHE_TITULARES_GLOBAL[t_clean] = resultado
+                    with CACHE_LOCK:
+                        CACHE_TITULARES_GLOBAL[t_clean] = resultado
                     return resultado
     except Exception:
         pass
 
-    CACHE_TITULARES_GLOBAL[t_clean] = t_clean
+    with CACHE_LOCK:
+        CACHE_TITULARES_GLOBAL[t_clean] = t_clean
     return t_clean
 
 def traducir_lote_titulares(lista_titulares):
@@ -286,7 +336,7 @@ RAICES_CIRILICO = [
 
 PATRON_CHINA_ESTRICTO = re.compile(
     r'\b('
-    r'china|chino|china|chinos|chinas|pekin|beijing|xi jinping|partido comunista chino|pcc|'
+    r'china|chino|chinos|chinas|pekin|beijing|xi jinping|partido comunista chino|pcc|'
     r'pla|ejercito popular de liberacion|taiwan|taipei|canton|hong kong|'
     r'apt41|volt typhoon|flax typhoon|mustang panda|salt typhoon|mss|ministerio de seguridad del estado|'
     r'ciberespionaje chino|injerencia china|injerencia de pekin|espionaje chino|comisarias chinas|estaciones de policia chinas'
@@ -340,7 +390,7 @@ def tiene_vector_amenaza_global(texto):
     if re.search(r'\b(papa|vaticano|santa sede|iglesia|obispo|pontifice|francisco|leon xiv)\b', t_norm) and not re.search(r'\b(ciberataque|sabotaje|espionaje|hack|ddos)\b', t_norm):
         return False
 
-    if any(emp in t_norm for emp in ["destinus", "uav navigation", "oesia", "tecnobit", "valdepenas", "indra", "escribano"]):
+    if any(emp in t_norm for emp in ["destinus", "uav navigation", "oesia", "tecnobit", "indra", "escribano"]):
         if re.search(r'\b(dron|drones|uav|hornet|antidron|defensa|militar|armada|contrato|ciberataque|amenaza|amenazadas|amenazado)\b', t_norm):
             return True
 
@@ -872,21 +922,21 @@ def ejecutar_actualizacion_total():
         else:
             titular_final = titular_limpio
             
-            # Cascada estricta con SANCIONES independiente
+            # Cascada equilibrada de clasificación
             if es_empresa_esp(titular_limpio, cuerpo_intacto):
                 cat_final = "EMPRESA"
+            elif es_detencion(titular_limpio, cuerpo_intacto):
+                cat_final = "DETENCION"
             elif es_cripto(titular_limpio, cuerpo_intacto):
                 cat_final = "CRIPTO"
             elif es_sancion(titular_limpio, cuerpo_intacto):
                 cat_final = "SANCIONES"
-            elif es_detencion(titular_limpio, cuerpo_intacto):
-                cat_final = "DETENCION"
+            elif es_espana(titular_limpio, cuerpo_intacto):
+                cat_final = "ESPANA"
             elif es_china(titular_limpio, cuerpo_intacto):
                 cat_final = "CHINA"
             elif es_crimen_guerra(titular_limpio, cuerpo_intacto):
                 cat_final = "CRIMENES"
-            elif es_espana(titular_limpio, cuerpo_intacto):
-                cat_final = "ESPANA"
             else:
                 cat_final = "GLOBAL"
 
@@ -1077,14 +1127,16 @@ def toggle_checkbox_callback(item_id):
         st.session_state.seleccionadas_pdf.discard(item_id)
 
 # ==========================================
-# ESTILOS E INTERFAZ STREAMLIT
+# ESTILOS VISUALES Y BOTONERA DE PESTAÑAS REDISEÑADA
 # ==========================================
 st.markdown("""
 <style>
     .main { background-color: #0b0f19; }
+    .block-container { padding-top: 1.5rem !important; }
+    
     .header-box {
         background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-        padding: 20px 28px;
+        padding: 18px 26px;
         border-radius: 10px;
         border-left: 10px solid #dc2626;
         border-bottom: 2px solid #334155;
@@ -1092,35 +1144,70 @@ st.markdown("""
         display: flex;
         align-items: center;
         gap: 18px;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
     }
-    .header-text h1 { color: #ffffff; margin: 0; font-size: 26px !important; font-weight: 900; text-transform: uppercase; }
-    .header-text p { color: #cbd5e1; font-size: 14px !important; margin: 3px 0 0 0; }
+    .header-text h1 { color: #ffffff; margin: 0; font-size: 25px !important; font-weight: 900; letter-spacing: 0.5px; text-transform: uppercase; }
+    .header-text p { color: #cbd5e1; font-size: 13.5px !important; margin: 3px 0 0 0; }
+
+    /* Contenedor de pestañas flexible: se adapta y permite ver TODAS las pestañas siempre */
+    div[data-baseweb="tab-list"] {
+        display: flex !important;
+        flex-wrap: wrap !important;
+        gap: 6px !important;
+        background-color: #0f172a !important;
+        padding: 8px 10px !important;
+        border-radius: 10px !important;
+        border: 1px solid #1e293b !important;
+        margin-bottom: 14px !important;
+    }
 
     button[data-baseweb="tab"] {
-        font-size: 11.5px !important; font-weight: 800 !important;
-        padding: 6px 8px !important; margin: 0 3px 8px 0 !important;
-        border-radius: 6px !important; color: #ffffff !important;
+        flex: 1 1 auto !important;
+        min-width: fit-content !important;
+        height: 36px !important;
+        font-size: 11.5px !important;
+        font-weight: 800 !important;
+        letter-spacing: 0.3px !important;
+        padding: 6px 11px !important;
+        margin: 0 !important;
+        border-radius: 6px !important;
+        color: #ffffff !important;
         text-transform: uppercase;
+        border: 1px solid rgba(255,255,255,0.12) !important;
+        transition: all 0.2s ease-in-out !important;
+        justify-content: center !important;
     }
-    button[data-baseweb="tab"]:nth-child(1) { background-color: #dc2626 !important; }
-    button[data-baseweb="tab"]:nth-child(2) { background-color: #d97706 !important; }
-    button[data-baseweb="tab"]:nth-child(3) { background-color: #0f172a !important; }
-    button[data-baseweb="tab"]:nth-child(4) { background-color: #991b1b !important; }
-    button[data-baseweb="tab"]:nth-child(5) { background-color: #7c3aed !important; }
-    button[data-baseweb="tab"]:nth-child(6) { background-color: #b45309 !important; }
-    button[data-baseweb="tab"]:nth-child(7) { background-color: #be123c !important; }
-    button[data-baseweb="tab"]:nth-child(8) { background-color: #1e3a8a !important; }
-    button[data-baseweb="tab"]:nth-child(9) { background-color: #0284c7 !important; }
-    button[data-baseweb="tab"]:nth-child(10) { background-color: #059669 !important; }
+
+    button[data-baseweb="tab"]:hover {
+        transform: translateY(-1px) !important;
+        filter: brightness(1.15) !important;
+    }
+
+    button[data-baseweb="tab"]:nth-child(1) { background: linear-gradient(135deg, #dc2626, #b91c1c) !important; }
+    button[data-baseweb="tab"]:nth-child(2) { background: linear-gradient(135deg, #d97706, #b45309) !important; }
+    button[data-baseweb="tab"]:nth-child(3) { background: linear-gradient(135deg, #334155, #1e293b) !important; }
+    button[data-baseweb="tab"]:nth-child(4) { background: linear-gradient(135deg, #991b1b, #7f1d1d) !important; }
+    button[data-baseweb="tab"]:nth-child(5) { background: linear-gradient(135deg, #7c3aed, #6d28d9) !important; }
+    button[data-baseweb="tab"]:nth-child(6) { background: linear-gradient(135deg, #b45309, #92400e) !important; }
+    button[data-baseweb="tab"]:nth-child(7) { background: linear-gradient(135deg, #be123c, #9f1239) !important; }
+    button[data-baseweb="tab"]:nth-child(8) { background: linear-gradient(135deg, #1e3a8a, #172554) !important; }
+    button[data-baseweb="tab"]:nth-child(9) { background: linear-gradient(135deg, #0284c7, #0369a1) !important; }
+    button[data-baseweb="tab"]:nth-child(10) { background: linear-gradient(135deg, #059669, #047857) !important; }
 
     button[data-baseweb="tab"][aria-selected="true"] {
         border: 2px solid #ffffff !important;
-        box-shadow: 0 0 12px rgba(255,255,255,0.4) !important;
+        box-shadow: 0 0 12px rgba(255,255,255,0.45) !important;
+        transform: scale(1.02) !important;
+    }
+
+    /* Ocultar la barrita inferior por defecto de Streamlit tabs */
+    div[data-baseweb="tab-highlight"] {
+        display: none !important;
     }
 
     .osint-card {
         background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px;
-        padding: 16px 20px; margin-bottom: 14px; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.05);
+        padding: 16px 20px; margin-bottom: 14px; box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
     }
     .osint-flex { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
     .osint-media { flex: 0 0 280px; max-width: 280px; }
@@ -1148,7 +1235,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-logo_svg = """<svg width="60" height="60" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><defs><radialGradient id="grad" cx="50%" cy="50%" r="50%"><stop offset="0%" style="stop-color:#1e293b;stop-opacity:1" /><stop offset="100%" style="stop-color:#0b0f19;stop-opacity:1" /></radialGradient></defs><circle cx="50" cy="50" r="48" fill="url(#grad)" stroke="#dc2626" stroke-width="3.5" /><circle cx="50" cy="50" r="38" fill="none" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="4,3" /><path d="M50 20 L73 31 V54 C73 69 50 81 50 81 C50 81 27 69 27 54 V31 Z" fill="#0f172a" stroke="#ffffff" stroke-width="2" /><polygon points="51,29 41,48 49,48 46,68 59,45 51,45" fill="#dc2626" /></svg>"""
+logo_svg = """<svg width="56" height="56" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><defs><radialGradient id="grad" cx="50%" cy="50%" r="50%"><stop offset="0%" style="stop-color:#1e293b;stop-opacity:1" /><stop offset="100%" style="stop-color:#0b0f19;stop-opacity:1" /></radialGradient></defs><circle cx="50" cy="50" r="48" fill="url(#grad)" stroke="#dc2626" stroke-width="3.5" /><circle cx="50" cy="50" r="38" fill="none" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="4,3" /><path d="M50 20 L73 31 V54 C73 69 50 81 50 81 C50 81 27 69 27 54 V31 Z" fill="#0f172a" stroke="#ffffff" stroke-width="2" /><polygon points="51,29 41,48 49,48 46,68 59,45 51,45" fill="#dc2626" /></svg>"""
 st.markdown(f'<div class="header-box"><div>{logo_svg}</div><div class="header-text"><h1>ANALIZADOR DE AMENAZAS HÍBRIDAS</h1><p>Monitor táctico de fuentes abiertas e inteligencia operativa</p></div></div>', unsafe_allow_html=True)
 
 if "arranque_inicial_ok" not in st.session_state:
@@ -1290,8 +1377,8 @@ def renderizar_tarjetas(lista_items):
             f'<div class="osint-flex">{media_html}'
             f'<div class="osint-body">'
             f'{badge_header}'
-            f'{bloque_reporte}'
             f'<div class="osint-title">{t_safe}</div>'
+            f'{bloque_reporte}'
             f'<div class="osint-analisis"><strong>🧠 Análisis:</strong> {a_safe}</div>'
             f'<div style="display:flex;gap:10px;align-items:center;">'
             f'<a href="{enlace}" target="_blank" class="btn-source">🔗 ABRIR FUENTE ORIGINAL</a>'
@@ -1317,7 +1404,7 @@ def renderizar_tarjetas(lista_items):
             st.markdown(tarjeta_html, unsafe_allow_html=True)
 
 # ==========================================
-# PESTAÑAS (10 SECCIONES CON SANCIONES DEDICADA)
+# PESTAÑAS (10 SECCIONES VISIBLES EN CABECERA)
 # ==========================================
 if "alertas_monitor" in st.session_state:
     l_esp = [x for x in datos_activos if x.get("categoria") == "ESPANA"]
@@ -1337,7 +1424,7 @@ if "alertas_monitor" in st.session_state:
         f"📰 GLOBAL ({len(l_prensa)})",
         f"⚖️ CRÍMENES DE GUERRA Y TERRORISMO ({len(l_crim)})",
         f"🟣 CRIPTO ({len(l_cripto)})",
-        f"📦 SANCIONES Y ELUSIÓN ({len(l_sanc)})",
+        f"📦 SANCIONES ({len(l_sanc)})",
         f"🛑 DETENCIONES ({len(l_det)})",
         f"🇨🇳 CHINA ({len(l_china)})",
         f"✈️ TELEGRAM ({len(l_tg)})",
