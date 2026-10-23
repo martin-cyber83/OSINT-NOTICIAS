@@ -31,14 +31,9 @@ st.set_page_config(
 # ==========================================
 st.markdown("""
 <style>
-    /* Ocultar barra superior y menú de Streamlit con enlace al código */
     #MainMenu {visibility: hidden !important; display: none !important;}
     header {visibility: hidden !important; display: none !important;}
-    
-    /* Ocultar pie de página ("Made with Streamlit") */
     footer {visibility: hidden !important; display: none !important;}
-    
-    /* Ocultar barra flotante de Streamlit Cloud y badge con perfil de GitHub */
     .viewerBadge_container__1QSob,
     [data-testid="stStatusWidget"],
     .viewerBadge_link__1QSob,
@@ -94,7 +89,7 @@ if not gestionar_acceso():
     st.stop()
 
 # ==========================================
-# SESIÓN HTTP OPTIMIZADA (POOL DE CONEXIONES)
+# SESIÓN HTTP OPTIMIZADA
 # ==========================================
 SESION_HTTP = requests.Session()
 retries = Retry(total=1, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
@@ -254,7 +249,7 @@ def extraer_resumen_rss(tit_orig, desc_rss):
     return limpio[:1800] if len(limpio) > 25 else limpiar_firma_medio(tit_orig)
 
 # ==========================================
-# DICCIONARIOS Y MATRICES DE AMENAZA (RUSIA + CHINA + POLONIA + TERRORISMO)
+# DICCIONARIOS Y MATRICES DE AMENAZA
 # ==========================================
 EMPRESAS_ESTRATEGICAS_ESP = [
     "destinus", "mikhail kokorich", "kokorich", "uav navigation",
@@ -377,7 +372,7 @@ def tiene_vector_amenaza_global(texto):
     return any(v in t_norm for v in vectores_latinos)
 
 # ==========================================
-# ENRUTADOR POR TEMÁTICA
+# ENRUTADORES DE CATEGORÍA
 # ==========================================
 def es_empresa_esp(titular, cuerpo):
     t_all = normalizar_texto(desparasitar_nombres_medios(f"{titular} {cuerpo}"))
@@ -402,6 +397,16 @@ def es_china(titular, cuerpo):
     if any(c in t_raw for c in RAICES_CHINO):
         return True
     return bool(PATRON_CHINA_ESTRICTO.search(t_norm))
+
+def es_sancion(titular, cuerpo):
+    t_all = normalizar_texto(f"{titular} {cuerpo}")
+    patron = r'\b(' \
+             r'sancion|sanciones|sanctions?|elusion|eludir|evasion de sanciones|' \
+             r'flota fantasma|shadow fleet|petrolero ruso|petroleros fantasma|' \
+             r'tope al crudo|price cap|contrabando de chips|tecnologia de doble uso|' \
+             r'triangulacion|comercio clandestino|lista negra de la ue|ofac' \
+             r')\b'
+    return bool(re.search(patron, t_all))
 
 def es_cripto(titular, cuerpo):
     t_all = normalizar_texto(f"{titular} {cuerpo}")
@@ -444,6 +449,8 @@ def generar_analisis_contexto(categoria, canal=""):
         return "Contenido de Anatolii Sharij: seguimiento crítico y difusión en redes del frente ucraniano-ruso."
     if canal_clean in CANALES_DESINFORMACION_ESP:
         return "Canal clasificado en la red de propaganda, desinformación e injerencia extranjera (FIMI) vinculada al ecosistema pro-Kremlin."
+    if categoria == "SANCIONES":
+        return "Vigilancia de elusión de sanciones: movimientos de la flota fantasma, redes de contrabando de doble uso o triangulación logística."
     if categoria == "CHINA":
         return "Actividad estratégica de la República Popular China: ciberespionaje (Volt Typhoon, APT41), injerencia en Occidente y alineación con Moscú."
     if categoria == "EMPRESA":
@@ -748,14 +755,14 @@ def procesar_un_feed_rss(datos_feed):
 
 def barrido_prensa_multilingue():
     fuentes_rss = [
-        # Prensa en español y seguimiento nacional
+        # Prensa nacional y fuentes OSINT
         ("https://theobjective.com/feed/", "The Objective (General)"),
         ("https://theobjective.com/espana/feed/", "The Objective (España)"),
         ("https://theobjective.com/internacional/feed/", "The Objective (Internacional)"),
         ("https://news.google.com/rss/search?q=(Rusia+OR+ruso+OR+Kremlin+OR+NoName057+OR+APT28)+(España+OR+Madrid+OR+CNI+OR+INCIBE)+(sabotaje+OR+ciberataque+OR+espionaje+OR+amenaza)&hl=es&gl=ES&ceid=ES:es", "España Seguridad (ES)"),
         ("https://news.google.com/rss/search?q=(Russia+OR+Russian+OR+Kremlin)+(Spain+OR+Madrid)+(sabotage+OR+cyberattack+OR+spy+OR+espionage)&hl=en-US&gl=US&ceid=US:en", "Spain Watch (EN)"),
         
-        # CHINA Y CIBERESPIONAJE / INJERENCIA ESTRATÉGICA
+        # CHINA Y CIBERESPIONAJE
         ("https://news.google.com/rss/search?q=(China+OR+Pekín+OR+Xi+Jinping+OR+APT41+OR+\"Volt+Typhoon\")+(España+OR+Occidente+OR+espionaje+OR+ciberataque+OR+injerencia)&hl=es&gl=ES&ceid=ES:es", "China Injerencia (ES)"),
         ("https://news.google.com/rss/search?q=(China+OR+Beijing)+(espionage+OR+sabotage+OR+cyberattack+OR+\"hybrid+warfare\")+West&hl=en-US&gl=US&ceid=US:en", "China Intel (EN)"),
         ("https://news.google.com/rss/search?q=China+Taiwan+(military+OR+sabotage+OR+cyber+OR+espionage)&hl=en-US&gl=US&ceid=US:en", "Asia Pacific Watch (EN)"),
@@ -764,25 +771,27 @@ def barrido_prensa_multilingue():
         ("https://news.google.com/rss/search?q=(\"empresas+amenazadas+por+rusia\"+OR+\"empresa+amenazada+por+rusia\"+OR+(Tecnobit+OR+Oesia+OR+Destinus+OR+Indra+OR+Navantia+OR+Escribano)+AND+(Rusia+OR+Kremlin+OR+Putin+OR+amenaza))&hl=es&gl=ES&ceid=ES:es", "Empresas Amenazadas (ES)"),
         ("https://news.google.com/rss/search?q=(Destinus+OR+Kokorich)+(Rusia+OR+Ucrania+OR+drones+OR+frente)&hl=es&gl=ES&ceid=ES:es", "Destinus / Drones (ES)"),
 
+        # SANCIONES, ELUSIÓN Y FLOTA FANTASMA
+        ("https://news.google.com/rss/search?q=(Rusia+OR+China+OR+Ucrania)+(\"elusion+de+sanciones\"+OR+\"flota+fantasma\"+OR+\"petrolero\"+OR+\"doble+uso\"+OR+\"triangulacion\")&hl=es&gl=ES&ceid=ES:es", "Sanciones / Elusión (ES)"),
+        ("https://news.google.com/rss/search?q=(Russia+OR+China+OR+Iran)+(\"sanctions+evasion\"+OR+\"shadow+fleet\"+OR+\"illicit+oil\"+OR+\"dual-use\")&hl=en-US&gl=US&ceid=US:en", "Sanctions Evasion (EN)"),
+
         # DETENCIONES Y CONTRAESPIONAJE
         ("https://news.google.com/rss/search?q=(detenido+OR+arrestado+OR+detencion)+(espia+ruso+OR+espia+chino+OR+sabotaje+OR+GRU+OR+MSS)&hl=es&gl=ES&ceid=ES:es", "Detenciones (ES)"),
         ("https://news.google.com/rss/search?q=(arrested+OR+detained)+(Russian+spy+OR+Chinese+spy+OR+sabotage)&hl=en-US&gl=US&ceid=US:en", "Detenciones (EN)"),
 
-        # POLONIA, PAÍSES BÁLTICOS Y EUROPA DEL ESTE
+        # POLONIA Y EUROPA DEL ESTE
         ("https://news.google.com/rss/search?q=(Polska+OR+Poland)+(sabotaż+OR+szpiegostwo+OR+dywersja+OR+ABW+OR+Rosja)&hl=pl&gl=PL&ceid=PL:pl", "Polonia / ABW (PL)"),
         ("https://news.google.com/rss/search?q=Poland+sabotage+Russian+agents+OR+arson&hl=en-US&gl=US&ceid=US:en", "Poland Sabotage (EN)"),
 
-        # CRIMEN ORGANIZADO, ASESINATOS, SERVICIOS DE INTELIGENCIA Y TERRORISMO
+        # CRIMEN ORGANIZADO, ASESINATOS Y TERRORISMO
         ("https://news.google.com/rss/search?q=(Rusia+OR+Ucrania+OR+China)+(\"crimen+organizado\"+OR+\"asesinato\"+OR+\"sicario\"+OR+\"atentado\"+OR+\"terrorismo\"+OR+\"servicios+de+inteligencia\")&hl=es&gl=ES&ceid=ES:es", "Crimen y Terrorismo (ES)"),
         ("https://news.google.com/rss/search?q=(Russia+OR+Ukraine+OR+China)+(\"organized+crime\"+OR+\"assassination\"+OR+\"targeted+killing\"+OR+\"intelligence+service\")&hl=en-US&gl=US&ceid=US:en", "Intel Killings & Terror (EN)"),
 
-        # FUENTES EN UCRANIANO Y RUSO (VÍA GOOGLE NEWS)
+        # FUENTES CIRÍLICAS
         ("https://news.google.com/rss/search?q=Россия+диверсия+OR+теракт+OR+шпионаж+OR+СБУ&hl=ru&gl=RU&ceid=RU:ru", "Rusia / Ecosistema RU"),
         ("https://news.google.com/rss/search?q=Україна+диверсія+OR+агент+OR+обстріл+OR+ГУР&hl=uk&gl=UA&ceid=UA:uk", "Ucrania / Frente UA"),
 
-        # INTELIGENCIA GLOBAL, SANCIONES Y ELUSIÓN
-        ("https://news.google.com/rss/search?q=(Russia+OR+China+OR+Ukraine)+(sabotage+OR+\"sanctions+evasion\"+OR+\"hybrid+warfare\"+OR+\"shadow+fleet\")&hl=en-US&gl=US&ceid=US:en", "Intel Global (EN)"),
-        ("https://news.google.com/rss/search?q=(Rusia+OR+China+OR+Ucrania)+(sabotaje+OR+\"elusion+de+sanciones\"+OR+\"guerra+hibrida\"+OR+\"flota+fantasma\")&hl=es&gl=ES&ceid=ES:es", "Frente Global (ES)"),
+        # CRIPTO Y FINANZAS CLANDESTINAS
         ("https://news.google.com/rss/search?q=(crypto+OR+bitcoin+OR+USDT+OR+Tether)+(Russia+OR+China+OR+sanctions+OR+Garantex)&hl=en-US&gl=US&ceid=US:en", "FININT Cripto (EN)")
     ]
     todas = []
@@ -863,11 +872,13 @@ def ejecutar_actualizacion_total():
         else:
             titular_final = titular_limpio
             
-            # Cascada estricta de categorización
+            # Cascada estricta con SANCIONES independiente
             if es_empresa_esp(titular_limpio, cuerpo_intacto):
                 cat_final = "EMPRESA"
             elif es_cripto(titular_limpio, cuerpo_intacto):
                 cat_final = "CRIPTO"
+            elif es_sancion(titular_limpio, cuerpo_intacto):
+                cat_final = "SANCIONES"
             elif es_detencion(titular_limpio, cuerpo_intacto):
                 cat_final = "DETENCION"
             elif es_china(titular_limpio, cuerpo_intacto):
@@ -936,10 +947,11 @@ SECCIONES_INFORME = [
     ("GLOBAL", "SECCIÓN 3: RUSIA, UCRANIA Y AMENAZAS GLOBALES", "#0f172a"),
     ("CRIMENES", "SECCIÓN 4: CRÍMENES DE GUERRA Y TERRORISMO", "#991b1b"),
     ("CRIPTO", "SECCIÓN 5: CRIPTOACTIVOS Y FINANCIACIÓN ILÍCITA", "#7c3aed"),
-    ("DETENCION", "SECCIÓN 6: DETENCIONES Y CONTRAESPIONAJE", "#be123c"),
-    ("CHINA", "SECCIÓN 7: CHINA Y AMENAZAS ESTRATÉGICAS A OCCIDENTE", "#1e3a8a"),
-    ("TELEGRAM", "SECCIÓN 8: TELEGRAM OSINT Y CANALES TÁCTICOS", "#0284c7"),
-    ("REDES", "SECCIÓN 9: REDES SOCIALES Y ANÁLISIS MULTIMEDIA", "#059669")
+    ("SANCIONES", "SECCIÓN 6: SANCIONES, ELUSIÓN Y FLOTA FANTASMA", "#b45309"),
+    ("DETENCION", "SECCIÓN 7: DETENCIONES Y CONTRAESPIONAJE", "#be123c"),
+    ("CHINA", "SECCIÓN 8: CHINA Y AMENAZAS ESTRATÉGICAS A OCCIDENTE", "#1e3a8a"),
+    ("TELEGRAM", "SECCIÓN 9: TELEGRAM OSINT Y CANALES TÁCTICOS", "#0284c7"),
+    ("REDES", "SECCIÓN 10: REDES SOCIALES Y ANÁLISIS MULTIMEDIA", "#059669")
 ]
 
 def generar_html_ejecutivo(alertas, solo_48h=False):
@@ -1085,9 +1097,9 @@ st.markdown("""
     .header-text p { color: #cbd5e1; font-size: 14px !important; margin: 3px 0 0 0; }
 
     button[data-baseweb="tab"] {
-        font-size: 12px !important; font-weight: 800 !important;
-        padding: 8px 10px !important; margin: 0 4px 10px 0 !important;
-        border-radius: 8px !important; color: #ffffff !important;
+        font-size: 11.5px !important; font-weight: 800 !important;
+        padding: 6px 8px !important; margin: 0 3px 8px 0 !important;
+        border-radius: 6px !important; color: #ffffff !important;
         text-transform: uppercase;
     }
     button[data-baseweb="tab"]:nth-child(1) { background-color: #dc2626 !important; }
@@ -1095,10 +1107,11 @@ st.markdown("""
     button[data-baseweb="tab"]:nth-child(3) { background-color: #0f172a !important; }
     button[data-baseweb="tab"]:nth-child(4) { background-color: #991b1b !important; }
     button[data-baseweb="tab"]:nth-child(5) { background-color: #7c3aed !important; }
-    button[data-baseweb="tab"]:nth-child(6) { background-color: #be123c !important; }
-    button[data-baseweb="tab"]:nth-child(7) { background-color: #1e3a8a !important; }
-    button[data-baseweb="tab"]:nth-child(8) { background-color: #0284c7 !important; }
-    button[data-baseweb="tab"]:nth-child(9) { background-color: #059669 !important; }
+    button[data-baseweb="tab"]:nth-child(6) { background-color: #b45309 !important; }
+    button[data-baseweb="tab"]:nth-child(7) { background-color: #be123c !important; }
+    button[data-baseweb="tab"]:nth-child(8) { background-color: #1e3a8a !important; }
+    button[data-baseweb="tab"]:nth-child(9) { background-color: #0284c7 !important; }
+    button[data-baseweb="tab"]:nth-child(10) { background-color: #059669 !important; }
 
     button[data-baseweb="tab"][aria-selected="true"] {
         border: 2px solid #ffffff !important;
@@ -1154,7 +1167,7 @@ alertas_totales = st.session_state.get("alertas_monitor", [])
 # ==========================================
 with st.sidebar:
     st.subheader("🔍 Filtros de Búsqueda")
-    busqueda_txt = st.text_input("Filtrar por texto:", placeholder="Ej: Destinus, Indra, Volt Typhoon, Zvinchuk...")
+    busqueda_txt = st.text_input("Filtrar por texto:", placeholder="Ej: Destinus, Indra, Volt Typhoon, Flota fantasma...")
 
     canales_disponibles = sorted(list({a["canal"] for a in alertas_totales}))
     canales_sel = st.multiselect("Filtrar por canal/fuente:", canales_disponibles, default=[])
@@ -1239,8 +1252,8 @@ def renderizar_tarjetas(lista_items):
 
         b_color = {
             "ESPANA": "#dc2626", "EMPRESA": "#d97706", "GLOBAL": "#0f172a",
-            "CRIMENES": "#991b1b", "CRIPTO": "#7c3aed", "DETENCION": "#be123c",
-            "CHINA": "#1e3a8a", "TELEGRAM": "#0284c7", "REDES": "#059669"
+            "CRIMENES": "#991b1b", "CRIPTO": "#7c3aed", "SANCIONES": "#b45309",
+            "DETENCION": "#be123c", "CHINA": "#1e3a8a", "TELEGRAM": "#0284c7", "REDES": "#059669"
         }.get(cat, "#0f172a")
 
         badges = ""
@@ -1304,7 +1317,7 @@ def renderizar_tarjetas(lista_items):
             st.markdown(tarjeta_html, unsafe_allow_html=True)
 
 # ==========================================
-# PESTAÑAS (ORDEN SOLICITADO CON CHINA TRAS DETENCIONES)
+# PESTAÑAS (10 SECCIONES CON SANCIONES DEDICADA)
 # ==========================================
 if "alertas_monitor" in st.session_state:
     l_esp = [x for x in datos_activos if x.get("categoria") == "ESPANA"]
@@ -1312,17 +1325,19 @@ if "alertas_monitor" in st.session_state:
     l_prensa = [x for x in datos_activos if x.get("categoria") == "GLOBAL"]
     l_crim = [x for x in datos_activos if x.get("categoria") == "CRIMENES"]
     l_cripto = [x for x in datos_activos if x.get("categoria") == "CRIPTO"]
+    l_sanc = [x for x in datos_activos if x.get("categoria") == "SANCIONES"]
     l_det = [x for x in datos_activos if x.get("categoria") == "DETENCION"]
     l_china = [x for x in datos_activos if x.get("categoria") == "CHINA"]
     l_tg = [x for x in datos_activos if x.get("categoria") == "TELEGRAM"]
     l_redes = [x for x in datos_activos if x.get("categoria") == "REDES"]
 
-    t1, t2, t3, t4, t5, t6, t7, t8, t9 = st.tabs([
+    t1, t2, t3, t4, t5, t6, t7, t8, t9, t10 = st.tabs([
         f"🇪🇸 ESPAÑA ({len(l_esp)})",
         f"🏢 EMPRESAS ({len(l_emp)})",
         f"📰 GLOBAL ({len(l_prensa)})",
         f"⚖️ CRÍMENES DE GUERRA Y TERRORISMO ({len(l_crim)})",
         f"🟣 CRIPTO ({len(l_cripto)})",
+        f"📦 SANCIONES Y ELUSIÓN ({len(l_sanc)})",
         f"🛑 DETENCIONES ({len(l_det)})",
         f"🇨🇳 CHINA ({len(l_china)})",
         f"✈️ TELEGRAM ({len(l_tg)})",
@@ -1339,10 +1354,12 @@ if "alertas_monitor" in st.session_state:
     with t5:
         renderizar_tarjetas(l_cripto)
     with t6:
-        renderizar_tarjetas(l_det)
+        renderizar_tarjetas(l_sanc)
     with t7:
-        renderizar_tarjetas(l_china)
+        renderizar_tarjetas(l_det)
     with t8:
-        renderizar_tarjetas(l_tg)
+        renderizar_tarjetas(l_china)
     with t9:
+        renderizar_tarjetas(l_tg)
+    with t10:
         renderizar_tarjetas(l_redes)
