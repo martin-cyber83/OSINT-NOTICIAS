@@ -43,7 +43,9 @@ def normalizar_texto(texto):
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)]).lower()
 
 def limpiar_firma_medio(texto):
-    return re.sub(r'\s*[-–|·]\s*[^-–|·]{2,45}$', '', str(texto)).strip()
+    # Elimina sufijos típicos de medios tipo "- MarketScreener España", "- Libertad Digital", etc.
+    t = re.sub(r'\s*[-–|·]\s*[^-–|·]{2,55}$', '', str(texto)).strip()
+    return t
 
 def limpiar_url(url):
     try:
@@ -94,7 +96,7 @@ def decodificar_url_google_news_offline(url_rss):
     return url_rss
 
 # ==========================================
-# TRADUCTOR DE TITULARES (SECUENCIAL ANTI-BLOQUEO)
+# TRADUCTOR DE TITULARES
 # ==========================================
 def traducir_solo_titular(titular_orig):
     if not titular_orig:
@@ -232,7 +234,7 @@ def tiene_vector_amenaza_estricto(texto):
         "desinformacion", "disinformation", "propaganda", "injerencia", "fimi",
         "cripto", "crypto", "bitcoin", "btc", "usdt", "tether", "garantex", "sancion", "sanction", "elusion",
         "flota fantasma", "shadow fleet", "cable submarino", "undersea cable", "petrolero",
-        "crimen de guerra", "crimenes de guerra", "war crime", "war crimes", "corte penal internacional", "icc",
+        "crimen de guerra", "war crime", "corte penal internacional", "icc",
         "genocidio", "tortura", "pow execution", "ejecucion", "masacre", "fosa comun", "bucha", "mariupol",
         "ataque civil", "ataque a civiles", "hospital", "escuela", "deportacion", "ninos ucranianos",
         "detenido", "detencion", "arrestado", "arresto", "arrested", "detained", "dron", "uav", "guerra electronica",
@@ -242,8 +244,13 @@ def tiene_vector_amenaza_estricto(texto):
     return any(v in t_norm for v in vectores_latinos)
 
 # ==========================================
-# CATEGORIZACIÓN
+# CATEGORIZACIÓN (FILTROS DEPURADOS)
 # ==========================================
+def es_cripto(titular, cuerpo):
+    t_all = normalizar_texto(f"{titular} {cuerpo}")
+    patron = r'\b(cripto|criptomoneda|criptomonedas|crypto|criptobolsa|usdt|tether|btc|bitcoin|monero|garantex|blockchain)\b'
+    return bool(re.search(patron, t_all))
+
 def es_crimen_guerra(titular, cuerpo):
     t_all = normalizar_texto(f"{titular} {cuerpo}")
     patron = r'\b(' \
@@ -260,22 +267,37 @@ def es_crimen_guerra(titular, cuerpo):
 
 def es_detencion(titular, cuerpo):
     t_all = normalizar_texto(f"{titular} {cuerpo}")
-    patron_det = r'\b(detenido|detenida|detenidos|detenidas|detienen|detiene|detencion|detenciones|arrestado|arrestada|arrestados|arrestadas|arrestan|arresta|arresto|arrestos|arrested|detained|festnahme|verhaftet|capturado|capturada|capturados|capturadas|capturan|desarticulad[oa]s?|prision|carcel|condenado|condenada|condenados|condenadas)\b'
+    patron_det = r'\b(detenido|detenida|detenidos|detenidas|detienen|detiene|detencion|detenciones|arrestado|arrestada|arrestados|arrestadas|arrestan|arresta|arresto|arrestos|arrested|detained|festnahme|verhaftet|capturado|capturada|capturados|capturadas|capturan|desarticulad[oa]s?|prision preventiva|prision provisional)\b'
     return bool(re.search(patron_det, t_all))
 
-def es_cripto(titular, cuerpo):
-    t_all = normalizar_texto(f"{titular} {cuerpo}")
-    patron = r'\b(cripto|criptomoneda|crypto|usdt|tether|btc|bitcoin|monero|garantex|blockchain|sancion|sanction|finint)\b'
-    return bool(re.search(patron, t_all))
-
 def es_empresa_esp(titular, cuerpo):
+    # Se evalúa sobre el texto sin firmas de medios
     t_all = normalizar_texto(f"{titular} {cuerpo}")
     return any(re.search(r'\b' + re.escape(emp) + r'\b', t_all) for emp in EMPRESAS_ESTRATEGICAS_ESP)
 
 def es_espana(titular, cuerpo):
+    # Se evalúa estrictamente sobre el contenido limpio (evitando 'MarketScreener España' o 'gobierno ruso')
     t_all = normalizar_texto(f"{titular} {cuerpo}")
-    patron = r'\b(espana|espanol|espanola|espanoles|espanolas|spain|madrid|barcelona|cni|incibe|ccn-cert|audiencia nacional|guardia civil|policia nacional|rota|torrejon|enaire|cartagena|gobierno|ministerio de defensa|margarita robles|defensa|puertos)\b'
-    return bool(re.search(patron, t_all))
+    
+    # Expresiones positivas claras de España
+    patron_esp = r'\b(' \
+                 r'espana|espanol|espanola|espanoles|espanolas|spain|madrid|barcelona|cartagena|' \
+                 r'cni|incibe|ccn-cert|audiencia nacional|guardia civil|policia nacional|base de rota|torrejon|' \
+                 r'gobierno de espana|gobierno espanol|ministerio de defensa|margarita robles|' \
+                 r'ejercito de tierra|armada espanola|ejercito del aire|militares espanoles|' \
+                 r'defensa confirma|defensa envia|seguridad nacional espanola' \
+                 r')\b'
+    
+    if not re.search(patron_esp, t_all):
+        return False
+        
+    # Si la única mención a España proviene de una edición de prensa o dominio, no es de España
+    if re.search(r'\b(marketscreener|edition|edicion espana)\b', t_all) and not re.search(r'\b(madrid|cni|defensa|militares espanoles|guardia civil)\b', t_all):
+        # Si habla explícitamente de otro país sin afectación española real
+        if re.search(r'\b(en ucrania|en rusia|en polonia|en alemania)\b', t_all) and not re.search(r'\b(militares espanoles|cni|espana)\b', t_all):
+            return False
+
+    return True
 
 def calcular_puntuacion_severidad(categoria, titular, cuerpo):
     t_all = normalizar_texto(f"{titular} {cuerpo}")
@@ -394,7 +416,6 @@ def raspar_un_canal_tg(canal):
         soup = BeautifulSoup(r.text, "html.parser")
         posts = soup.find_all("div", class_="tgme_widget_message_wrap")
 
-        # Tanto Anatolii Sharij como Mijaíl Zvinchuk (@rybar) se catalogan como REDES
         es_red_social = canal in ["ASupersharij", "rybar"]
 
         for p in posts[-35:]:
@@ -474,8 +495,8 @@ def raspar_un_canal_tg(canal):
 
 def raspar_telegram_masivo():
     canales = [
-        "rybar",        # Mijaíl Zvinchuk
-        "ASupersharij", # Anatolii Sharij
+        "rybar",
+        "ASupersharij",
         "DIUkraine", "SBUkr", "informnapalm", "cyberresistanceua",
         "entre_guerras", "dva_majors", "vchkogpu",
         "meduzalive", "astrapress", "istories_media",
@@ -564,7 +585,7 @@ def raspar_antikor():
     return items
 
 # ==========================================
-# RECOLECTOR RSS PRENSA (THE OBJECTIVE + CRÍMENES REFORZADOS)
+# RECOLECTOR RSS PRENSA
 # ==========================================
 def procesar_un_feed_rss(datos_feed):
     url, etiqueta = datos_feed
@@ -614,7 +635,7 @@ def procesar_un_feed_rss(datos_feed):
 
 def barrido_prensa_multilingue():
     fuentes_rss = [
-        # The Objective Feeds nativos
+        # Feeds nativos de The Objective
         ("https://theobjective.com/feed/", "The Objective (General)"),
         ("https://theobjective.com/espana/feed/", "The Objective (España)"),
         ("https://theobjective.com/internacional/feed/", "The Objective (Internacional)"),
@@ -624,11 +645,11 @@ def barrido_prensa_multilingue():
         ("https://news.google.com/rss/search?q=(Russia+OR+Russian+OR+Kremlin)+(Spain+OR+Madrid)+(sabotage+OR+cyberattack+OR+spy+OR+espionage)&hl=en-US&gl=US&ceid=US:en", "Spain Watch (EN)"),
         ("https://news.google.com/rss/search?q=(Indra+OR+Navantia+OR+Escribano+OR+Sener+OR+Telefónica+OR+Iberdrola)+(Rusia+OR+ciberataque+OR+sabotaje+OR+hackers)&hl=es&gl=ES&ceid=ES:es", "Empresas España (ES)"),
 
-        # Detenciones por espionaje/sabotaje
+        # Detenciones
         ("https://news.google.com/rss/search?q=(detenido+OR+arrestado+OR+detencion)+(espia+ruso+OR+sabotaje+ruso+OR+GRU+OR+FSB+OR+SVR)&hl=es&gl=ES&ceid=ES:es", "Detenciones (ES)"),
         ("https://news.google.com/rss/search?q=(arrested+OR+detained)+(Russian+spy+OR+Russian+sabotage+OR+GRU+OR+FSB)&hl=en-US&gl=US&ceid=US:en", "Detenciones (EN)"),
 
-        # Crímenes de Guerra, Ataques a Civiles y DDHH ampliado
+        # Crímenes de Guerra y Ataques a Civiles
         ("https://news.google.com/rss/search?q=(Rusia+OR+ruso+OR+tropas+rusas)+(\"crimen+de+guerra\"+OR+\"crimenes+de+guerra\"+OR+\"Corte+Penal\"+OR+\"ataque+a+civiles\"+OR+\"bombardeo+residencial\"+OR+\"prisioneros\")&hl=es&gl=ES&ceid=ES:es", "Crímenes Guerra (ES)"),
         ("https://news.google.com/rss/search?q=(Russia+OR+Russian+forces)+(\"war+crime\"+OR+\"war+crimes\"+OR+ICC+OR+\"civilian+casualties\"+OR+\"hospital+strike\"+OR+\"POW+execution\")&hl=en-US&gl=US&ceid=US:en", "War Crimes (EN)"),
         ("https://news.google.com/rss/search?q=(Rusia+OR+Ucrania)+(\"ejecucion\"+OR+\"tortura\"+OR+\"fosa+comun\"+OR+\"deportacion\")+civiles&hl=es&gl=ES&ceid=ES:es", "DDHH Conflicto (ES)"),
@@ -698,7 +719,6 @@ def ejecutar_actualizacion_total():
         st.session_state.seleccionadas_pdf = set()
         return
 
-    # Traducción secuencial anti-bloqueo
     titulares_traducidos = []
     for item in pre_unicos:
         titulares_traducidos.append(traducir_solo_titular(item["titular_raw"]))
@@ -717,19 +737,26 @@ def ejecutar_actualizacion_total():
             cat_final = "TELEGRAM"
         else:
             titular_final = tit_es
+            # Se retira la firma del medio (ej. MarketScreener España) antes de clasificar
             tit_sin_medio = limpiar_firma_medio(titular_final)
 
-            # Clasificación prioritaria: España y Empresas primero
-            if es_empresa_esp(tit_sin_medio, cuerpo_intacto):
+            # Cascada lógica corregida:
+            # 1. Cripto (sanciones a bolsas, usdt, etc.)
+            # 2. Detenciones (arrestos de espías)
+            # 3. Crímenes de Guerra (hospitales, civiles)
+            # 4. Empresas Estratégicas españolas
+            # 5. España (afectación real al territorio/gobierno español)
+            # 6. Global
+            if es_cripto(tit_sin_medio, cuerpo_intacto):
+                cat_final = "CRIPTO"
+            elif es_detencion(tit_sin_medio, cuerpo_intacto):
+                cat_final = "DETENCION"
+            elif es_crimen_guerra(tit_sin_medio, cuerpo_intacto):
+                cat_final = "CRIMENES"
+            elif es_empresa_esp(tit_sin_medio, cuerpo_intacto):
                 cat_final = "EMPRESA"
             elif es_espana(tit_sin_medio, cuerpo_intacto):
                 cat_final = "ESPANA"
-            elif es_crimen_guerra(tit_sin_medio, cuerpo_intacto):
-                cat_final = "CRIMENES"
-            elif es_detencion(tit_sin_medio, cuerpo_intacto):
-                cat_final = "DETENCION"
-            elif es_cripto(tit_sin_medio, cuerpo_intacto):
-                cat_final = "CRIPTO"
             else:
                 cat_final = "GLOBAL"
 
