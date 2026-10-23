@@ -13,6 +13,7 @@ from difflib import SequenceMatcher
 from urllib.parse import urlparse, urlunparse
 import pandas as pd
 import io
+from collections import Counter
 
 # ==========================================
 # CONFIGURACIÓN DE SESIÓN HTTP Y CACHÉ
@@ -43,9 +44,24 @@ def normalizar_texto(texto):
     return "".join([c for c in nfkd_form if not unicodedata.combining(c)]).lower()
 
 def limpiar_firma_medio(texto):
-    # Elimina sufijos típicos de medios tipo "- MarketScreener España", "- Libertad Digital", etc.
-    t = re.sub(r'\s*[-–|·]\s*[^-–|·]{2,55}$', '', str(texto)).strip()
+    if not texto:
+        return ""
+    # Quita firmas de periódicos al final (ej. - MarketScreener España, - Libertad Digital)
+    t = re.sub(r'\s*[-–|·]\s*[^-–|·]{2,60}$', '', str(texto)).strip()
     return t
+
+def desparasitar_nombres_medios(texto):
+    """Elimina menciones a periódicos que contaminan la categorización geográfica."""
+    t = str(texto)
+    patrones_medios = [
+        r'marketscreener\s*espa[nñ]a', r'libertad\s*digital', r'el\s*confidencial',
+        r'el\s*periodico', r'el\s*pais', r'el\s*mundo', r'la\s*razon', r'the\s*objective',
+        r'europa\s*press', r'agencia\s*efe', r'rtve', r'investigative\s*journalism\s*foundation',
+        r'24horas', r'responsible\s*statecraft'
+    ]
+    for p in patrones_medios:
+        t = re.sub(p, ' ', t, flags=re.IGNORECASE)
+    return re.sub(r'\s+', ' ', t).strip()
 
 def limpiar_url(url):
     try:
@@ -96,7 +112,7 @@ def decodificar_url_google_news_offline(url_rss):
     return url_rss
 
 # ==========================================
-# TRADUCTOR DE TITULARES
+# TRADUCTOR DE TITULARES (SECUENCIAL)
 # ==========================================
 def traducir_solo_titular(titular_orig):
     if not titular_orig:
@@ -244,7 +260,7 @@ def tiene_vector_amenaza_estricto(texto):
     return any(v in t_norm for v in vectores_latinos)
 
 # ==========================================
-# CATEGORIZACIÓN (FILTROS DEPURADOS)
+# CATEGORIZACIÓN CORREGIDA Y BLINDADA
 # ==========================================
 def es_cripto(titular, cuerpo):
     t_all = normalizar_texto(f"{titular} {cuerpo}")
@@ -271,15 +287,15 @@ def es_detencion(titular, cuerpo):
     return bool(re.search(patron_det, t_all))
 
 def es_empresa_esp(titular, cuerpo):
-    # Se evalúa sobre el texto sin firmas de medios
-    t_all = normalizar_texto(f"{titular} {cuerpo}")
+    # Evaluado sobre texto sin nombres de medios
+    t_all = normalizar_texto(desparasitar_nombres_medios(f"{titular} {cuerpo}"))
     return any(re.search(r'\b' + re.escape(emp) + r'\b', t_all) for emp in EMPRESAS_ESTRATEGICAS_ESP)
 
 def es_espana(titular, cuerpo):
-    # Se evalúa estrictamente sobre el contenido limpio (evitando 'MarketScreener España' o 'gobierno ruso')
-    t_all = normalizar_texto(f"{titular} {cuerpo}")
-    
-    # Expresiones positivas claras de España
+    """Filtro de España inmune a firmas de medios (MarketScreener España, etc.)."""
+    texto_limpio = desparasitar_nombres_medios(f"{titular} {cuerpo}")
+    t_norm = normalizar_texto(texto_limpio)
+
     patron_esp = r'\b(' \
                  r'espana|espanol|espanola|espanoles|espanolas|spain|madrid|barcelona|cartagena|' \
                  r'cni|incibe|ccn-cert|audiencia nacional|guardia civil|policia nacional|base de rota|torrejon|' \
@@ -287,15 +303,13 @@ def es_espana(titular, cuerpo):
                  r'ejercito de tierra|armada espanola|ejercito del aire|militares espanoles|' \
                  r'defensa confirma|defensa envia|seguridad nacional espanola' \
                  r')\b'
-    
-    if not re.search(patron_esp, t_all):
+
+    if not re.search(patron_esp, t_norm):
         return False
-        
-    # Si la única mención a España proviene de una edición de prensa o dominio, no es de España
-    if re.search(r'\b(marketscreener|edition|edicion espana)\b', t_all) and not re.search(r'\b(madrid|cni|defensa|militares espanoles|guardia civil)\b', t_all):
-        # Si habla explícitamente de otro país sin afectación española real
-        if re.search(r'\b(en ucrania|en rusia|en polonia|en alemania)\b', t_all) and not re.search(r'\b(militares espanoles|cni|espana)\b', t_all):
-            return False
+
+    # Descartar si solo habla de otros países sin vinculación con España
+    if re.search(r'\b(en ucrania|en rusia|en polonia|en alemania|en dinamarca)\b', t_norm) and not re.search(r'\b(militares espanoles|cni|espana|gobierno espanol)\b', t_norm):
+        return False
 
     return True
 
@@ -416,6 +430,7 @@ def raspar_un_canal_tg(canal):
         soup = BeautifulSoup(r.text, "html.parser")
         posts = soup.find_all("div", class_="tgme_widget_message_wrap")
 
+        # Tanto Anatolii Sharij como Mijaíl Zvinchuk (@rybar) se catalogan como REDES
         es_red_social = canal in ["ASupersharij", "rybar"]
 
         for p in posts[-35:]:
@@ -728,34 +743,29 @@ def ejecutar_actualizacion_total():
         cuerpo_intacto = item["cuerpo_raw"]
         plat = item["plataforma"]
 
+        # Se limpia la firma del medio del titular visible (ej: - MarketScreener España)
+        titular_limpio = limpiar_firma_medio(tit_es)
+
         if plat == "REDES":
-            titular_final = tit_es
+            titular_final = titular_limpio
             cat_final = "REDES"
         elif plat == "TELEGRAM":
             canal_tag = item["canal"].replace("@", "").upper()
-            titular_final = f"[{canal_tag}] {tit_es}"
+            titular_final = f"[{canal_tag}] {titular_limpio}"
             cat_final = "TELEGRAM"
         else:
-            titular_final = tit_es
-            # Se retira la firma del medio (ej. MarketScreener España) antes de clasificar
-            tit_sin_medio = limpiar_firma_medio(titular_final)
+            titular_final = titular_limpio
 
-            # Cascada lógica corregida:
-            # 1. Cripto (sanciones a bolsas, usdt, etc.)
-            # 2. Detenciones (arrestos de espías)
-            # 3. Crímenes de Guerra (hospitales, civiles)
-            # 4. Empresas Estratégicas españolas
-            # 5. España (afectación real al territorio/gobierno español)
-            # 6. Global
-            if es_cripto(tit_sin_medio, cuerpo_intacto):
+            # Cascada de categorización estricta:
+            if es_cripto(titular_limpio, cuerpo_intacto):
                 cat_final = "CRIPTO"
-            elif es_detencion(tit_sin_medio, cuerpo_intacto):
+            elif es_detencion(titular_limpio, cuerpo_intacto):
                 cat_final = "DETENCION"
-            elif es_crimen_guerra(tit_sin_medio, cuerpo_intacto):
+            elif es_crimen_guerra(titular_limpio, cuerpo_intacto):
                 cat_final = "CRIMENES"
-            elif es_empresa_esp(tit_sin_medio, cuerpo_intacto):
+            elif es_empresa_esp(titular_limpio, cuerpo_intacto):
                 cat_final = "EMPRESA"
-            elif es_espana(tit_sin_medio, cuerpo_intacto):
+            elif es_espana(titular_limpio, cuerpo_intacto):
                 cat_final = "ESPANA"
             else:
                 cat_final = "GLOBAL"
@@ -965,17 +975,24 @@ st.markdown("""
     .main { background-color: #0b0f19; }
     .header-box {
         background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-        padding: 22px 30px;
+        padding: 20px 28px;
         border-radius: 10px;
         border-left: 10px solid #dc2626;
         border-bottom: 2px solid #334155;
-        margin-bottom: 16px;
+        margin-bottom: 14px;
         display: flex;
         align-items: center;
-        gap: 20px;
+        gap: 18px;
     }
-    .header-text h1 { color: #ffffff; margin: 0; font-size: 28px !important; font-weight: 900; text-transform: uppercase; }
-    .header-text p { color: #cbd5e1; font-size: 15px !important; margin: 4px 0 0 0; }
+    .header-text h1 { color: #ffffff; margin: 0; font-size: 26px !important; font-weight: 900; text-transform: uppercase; }
+    .header-text p { color: #cbd5e1; font-size: 14px !important; margin: 3px 0 0 0; }
+
+    .kpi-card {
+        background-color: #1e293b; border: 1px solid #334155; border-radius: 8px;
+        padding: 10px 14px; text-align: center; color: #ffffff;
+    }
+    .kpi-num { font-size: 22px; font-weight: 900; color: #38bdf8; margin: 0; }
+    .kpi-label { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin: 0; }
 
     button[data-baseweb="tab"] {
         font-size: 12px !important; font-weight: 800 !important;
@@ -1006,7 +1023,7 @@ st.markdown("""
     .osint-media img { width: 100%; height: auto; max-height: 220px; object-fit: cover; border-radius: 6px; }
     .osint-body { flex: 1; min-width: 260px; }
     .badge-item { font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 4px; text-transform: uppercase; }
-    .osint-title { color: #0f172a; font-size: 18px; font-weight: 850; margin: 4px 0 8px 0; line-height: 1.35; }
+    .osint-title { color: #0f172a; font-size: 17.5px; font-weight: 850; margin: 4px 0 8px 0; line-height: 1.35; }
     .osint-resumen {
         background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px;
         padding: 10px 14px; color: #1e293b; font-size: 14px; line-height: 1.55;
@@ -1027,7 +1044,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-logo_svg = """<svg width="64" height="64" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><defs><radialGradient id="grad" cx="50%" cy="50%" r="50%"><stop offset="0%" style="stop-color:#1e293b;stop-opacity:1" /><stop offset="100%" style="stop-color:#0b0f19;stop-opacity:1" /></radialGradient></defs><circle cx="50" cy="50" r="48" fill="url(#grad)" stroke="#dc2626" stroke-width="3.5" /><circle cx="50" cy="50" r="38" fill="none" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="4,3" /><path d="M50 20 L73 31 V54 C73 69 50 81 50 81 C50 81 27 69 27 54 V31 Z" fill="#0f172a" stroke="#ffffff" stroke-width="2" /><polygon points="51,29 41,48 49,48 46,68 59,45 51,45" fill="#dc2626" /></svg>"""
+logo_svg = """<svg width="60" height="60" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><defs><radialGradient id="grad" cx="50%" cy="50%" r="50%"><stop offset="0%" style="stop-color:#1e293b;stop-opacity:1" /><stop offset="100%" style="stop-color:#0b0f19;stop-opacity:1" /></radialGradient></defs><circle cx="50" cy="50" r="48" fill="url(#grad)" stroke="#dc2626" stroke-width="3.5" /><circle cx="50" cy="50" r="38" fill="none" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="4,3" /><path d="M50 20 L73 31 V54 C73 69 50 81 50 81 C50 81 27 69 27 54 V31 Z" fill="#0f172a" stroke="#ffffff" stroke-width="2" /><polygon points="51,29 41,48 49,48 46,68 59,45 51,45" fill="#dc2626" /></svg>"""
 st.markdown(f'<div class="header-box"><div>{logo_svg}</div><div class="header-text"><h1>ANALIZADOR DE AMENAZAS HÍBRIDAS</h1><p>Monitor táctico de fuentes abiertas e inteligencia operativa</p></div></div>', unsafe_allow_html=True)
 
 if "arranque_inicial_ok" not in st.session_state:
@@ -1080,6 +1097,51 @@ if nivel_severidad_min > 1:
     datos_filtrados = [x for x in datos_filtrados if x.get("severidad", 1) >= nivel_severidad_min]
 
 # ==========================================
+# PANEL DE CONTROL EJECUTIVO (KPIS Y RADAR)
+# ==========================================
+datos_activos = datos_filtrados
+solo_48h = False
+
+c_kpi1, c_kpi2, c_kpi3, c_kpi4, c_kpi5 = st.columns(5)
+with c_kpi1:
+    st.markdown(f'<div class="kpi-card"><p class="kpi-num">{len(datos_activos)}</p><p class="kpi-label">Alertas Totales</p></div>', unsafe_allow_html=True)
+with c_kpi2:
+    sev_altas = len([x for x in datos_activos if x.get("severidad", 1) >= 4])
+    st.markdown(f'<div class="kpi-card"><p class="kpi-num" style="color:#ef4444;">{sev_altas}</p><p class="kpi-label">Criticidad Alta (4-5)</p></div>', unsafe_allow_html=True)
+with c_kpi3:
+    tot_esp = len([x for x in datos_activos if x.get("categoria") in ["ESPANA", "EMPRESA"]])
+    st.markdown(f'<div class="kpi-card"><p class="kpi-num" style="color:#f59e0b;">{tot_esp}</p><p class="kpi-label">Foco España / Defensa</p></div>', unsafe_allow_html=True)
+with c_kpi4:
+    tot_fimi = len([x for x in datos_activos if x.get("canal", "").replace("@", "") in CANALES_DESINFORMACION_ESP])
+    st.markdown(f'<div class="kpi-card"><p class="kpi-num" style="color:#ec4899;">{tot_fimi}</p><p class="kpi-label">FIMI / Desinformación</p></div>', unsafe_allow_html=True)
+with c_kpi5:
+    tot_multimedia = len([x for x in datos_activos if x.get("multimedia") or x.get("tiene_video")])
+    st.markdown(f'<div class="kpi-card"><p class="kpi-num" style="color:#10b981;">{tot_multimedia}</p><p class="kpi-label">Con Multimedia/Vídeo</p></div>', unsafe_allow_html=True)
+
+st.write("")
+
+# Desplegable visual de análisis de datos (Radar de Términos y Distribución)
+with st.expander("📈 Panel de Análisis de Inteligencia y Tendencias (Clic para desplegar)", expanded=False):
+    col_chart1, col_chart2 = st.columns([1.2, 1.0])
+    with col_chart1:
+        st.caption("📊 Distribución de Alertas por Categoría Táctica")
+        conteo_cats = Counter([x.get("categoria", "GLOBAL") for x in datos_activos])
+        df_cats = pd.DataFrame(list(conteo_cats.items()), columns=["Categoría", "Cantidad"]).set_index("Categoría")
+        st.bar_chart(df_cats, color="#dc2626")
+
+    with col_chart2:
+        st.caption("🏷️ Términos Más Frecuentes Detectados (Hot Topics)")
+        palabras_ignorar = {"para", "como", "sobre", "este", "entre", "rusia", "ruso", "rusa", "ucrania", "segun", "esta", "estos", "desde"}
+        todas_palabras = []
+        for x in datos_activos:
+            tokens = re.findall(r'\b[a-zA-Záéíóúñ]{4,15}\b', normalizar_texto(x.get("titular", "")))
+            todas_palabras.extend([w for w in tokens if w not in palabras_ignorar])
+        top_words = Counter(todas_palabras).most_common(12)
+        if top_words:
+            df_words = pd.DataFrame(top_words, columns=["Término Táctico", "Frecuencia"]).set_index("Término Táctico")
+            st.dataframe(df_words, use_container_width=True)
+
+# ==========================================
 # BOTONERA SUPERIOR
 # ==========================================
 col_btn1, col_btn2, col_filtro, col_info = st.columns([1.2, 1.4, 1.1, 1.5])
@@ -1093,7 +1155,9 @@ with col_btn1:
 with col_filtro:
     solo_48h = st.checkbox("🔥 Solo Últimas 48h", value=False)
 
-datos_activos = [x for x in datos_filtrados if es_reciente_48h(x.get("fecha_dt"))] if solo_48h else datos_filtrados
+if solo_48h:
+    datos_activos = [x for x in datos_filtrados if es_reciente_48h(x.get("fecha_dt"))]
+
 alertas_para_informe = [x for x in datos_activos if x.get("id") in st.session_state.seleccionadas_pdf]
 
 with col_btn2:
