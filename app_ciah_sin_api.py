@@ -57,7 +57,7 @@ def desparasitar_nombres_medios(texto):
         r'marketscreener\s*espa[nñ]a', r'libertad\s*digital', r'el\s*confidencial',
         r'el\s*periodico', r'el\s*pais', r'el\s*mundo', r'la\s*razon', r'the\s*objective',
         r'europa\s*press', r'agencia\s*efe', r'rtve', r'investigative\s*journalism\s*foundation',
-        r'24horas', r'responsible\s*statecraft', r'aleteia(\.org)?', r'vatican\s*news'
+        r'24horas', r'responsible\s*statecraft', r'aleteia(\.org)?', r'vatican\s*news', r'cmmedia'
     ]
     for p in patrones_medios:
         t = re.sub(p, ' ', t, flags=re.IGNORECASE)
@@ -171,9 +171,10 @@ def extraer_resumen_rss(tit_orig, desc_rss):
 # ==========================================
 # DICCIONARIOS Y FILTROS ESTRICTOS
 # ==========================================
+# Añadimos 'valdepenas' para capturar noticias de Tecnobit/Oesía que no nombran a la empresa.
 EMPRESAS_ESTRATEGICAS_ESP = [
     "destinus", "mikhail kokorich", "kokorich", "hornet block", "uav navigation",
-    "grupo oesia", "oesia", "tecnobit", "indra", "navantia", "escribano", "em&e",
+    "grupo oesia", "oesia", "tecnobit", "valdepenas", "indra", "navantia", "escribano", "em&e",
     "sener", "arquimea", "santa barbara", "gdels", "expal", "rheinmetall expal",
     "instalaza", "sapla", "urovesa", "itp aero", "airbus espana", "airbus getafe",
     "hisdesat", "hispasat", "sateliot", "pld space", "amadeus", "aena", "enaire",
@@ -223,9 +224,9 @@ def tiene_vinculo_ruso_estricto(texto):
     t_raw = str(texto).lower()
     t_norm = normalizar_texto(texto)
 
-    # PERMITIR PASO SI ES EMPRESA ESPAÑOLA VINCULADA A AMENAZAS/CONFLICTOS (Ej. Destinus, Oesia, etc.)
-    if any(emp in t_norm for emp in ["destinus", "kokorich", "indra", "navantia", "escribano", "oesia", "tecnobit", "instalaza", "santa barbara", "telefonica"]):
-        if re.search(r'\b(dron|drones|ucrania|rusia|frente|militar|defensa|ciberataque|sabotaje|hack|misil|contrato|armada|ejercito|amenaza|amenazadas)\b', t_norm):
+    # Permitir si trata sobre empresas estratégicas mencionadas con un vector militar explícito
+    if any(emp in t_norm for emp in ["destinus", "kokorich", "indra", "navantia", "escribano", "oesia", "tecnobit", "valdepenas"]):
+        if re.search(r'\b(dron|drones|ucrania|rusia|frente|militar|defensa|ciberataque|sabotaje|hack|misil|contrato|armada|ejercito|amenaza|amenazadas|amenazado)\b', t_norm):
             return True
 
     if any(c in t_raw for c in RAICES_CIRILICO_RUSIA):
@@ -245,9 +246,9 @@ def tiene_vector_amenaza_estricto(texto):
     if re.search(r'\b(papa|vaticano|santa sede|iglesia|obispo|pontifice|francisco|leon xiv)\b', t_norm) and not re.search(r'\b(ciberataque|sabotaje|espionaje|hack|ddos)\b', t_norm):
         return False
 
-    # Paso libre para empresas estratégicas
-    if any(emp in t_norm for emp in ["destinus", "uav navigation", "oesia", "tecnobit", "indra", "escribano"]):
-        if re.search(r'\b(dron|drones|uav|hornet|antidron|defensa|militar|armada|contrato|ciberataque|amenaza|amenazadas)\b', t_norm):
+    # Paso libre si es empresa estratégica relacionada con armamento o amenazas
+    if any(emp in t_norm for emp in ["destinus", "uav navigation", "oesia", "tecnobit", "valdepenas", "indra", "escribano"]):
+        if re.search(r'\b(dron|drones|uav|hornet|antidron|defensa|militar|armada|contrato|ciberataque|amenaza|amenazadas|amenazado)\b', t_norm):
             return True
 
     vectores_cirilico = [
@@ -270,26 +271,26 @@ def tiene_vector_amenaza_estricto(texto):
         "ataque civil", "ataque a civiles", "hospital", "escuela", "deportacion", "ninos ucranianos",
         "detenido", "detencion", "arrestado", "arresto", "arrested", "detained", "dron", "uav", "guerra electronica",
         "jamming", "arson", "incendio provocado", "guerra", "ejercito", "militar", "otan", "nato", "frente", "misil",
-        "ataque", "ofensiva", "bombardeo", "shariy", "sharij", "rybar", "zvinchuk", "destinus", "hornet", "interceptor", "amenazada"
+        "ataque", "ofensiva", "bombardeo", "shariy", "sharij", "rybar", "zvinchuk", "destinus", "hornet", "interceptor", 
+        "amenaza", "amenazadas", "amenazado"
     ]
     return any(v in t_norm for v in vectores_latinos)
 
 # ==========================================
-# CATEGORIZACIÓN 
+# CATEGORIZACIÓN E INFERENCIA LÓGICA
 # ==========================================
 def es_empresa_esp(titular, cuerpo):
     t_all = normalizar_texto(desparasitar_nombres_medios(f"{titular} {cuerpo}"))
     
-    # 1. Comprueba si menciona a la empresa (Ej. Oesía, Tecnobit, Indra, Destinus)
+    # 1. Comprobar si menciona a la empresa (o Valdepeñas por la sede de Tecnobit)
     hay_empresa = any(re.search(r'\b' + re.escape(emp) + r'\b', t_all) for emp in EMPRESAS_ESTRATEGICAS_ESP)
     if not hay_empresa:
         return False
+        
+    # 2. DOBLE CERRADURA: Exigir obligatoriamente contexto Rusia/Ucrania/Guerra/Amenaza.
+    # Así no entran noticias financieras puras de Indra o Telefónica.
+    patron_contexto = r'\b(rusia|ruso|rusa|ucrania|ucraniano|putin|moscu|amenaza|amenazadas|amenazado|ciberataque|sabotaje|hackeo|dron|drones|misil|defensa|militar|armamento|otan)\b'
     
-    # 2. Exige un contexto bélico, de ciberseguridad o de Rusia/Ucrania para no coger noticias de Bolsa puras
-    patron_contexto = r'\b(rusia|ruso|rusa|ucrania|ucraniano|moscu|kremlin|amenaza|amenazadas|ciberataque|' \
-                      r'hackeo|sabotaje|espionaje|dron|drones|antidron|misil|defensa|armada|' \
-                      r'ejercito|guerra|otan|noname057|killnet|apt28)\b'
-                      
     return bool(re.search(patron_contexto, t_all))
 
 def es_cripto(titular, cuerpo):
@@ -320,6 +321,7 @@ def es_espana(titular, cuerpo):
     if not re.search(patron_esp, t_norm):
         return False
 
+    # Exigir contexto duro de estado si el evento ocurre totalmente fuera
     if re.search(r'\b(en ucrania|en rusia|en polonia|en alemania|en dinamarca|eeuu|estados unidos)\b', t_norm):
         if not re.search(r'\b(militares espanoles|cni|gobierno de espana|ministerio de defensa|incibe|guardia civil)\b', t_norm):
             return False
@@ -335,7 +337,7 @@ def generar_analisis_contexto(categoria, canal=""):
     if canal_clean in CANALES_DESINFORMACION_ESP:
         return "Canal clasificado en la red de propaganda, desinformación e injerencia extranjera (FIMI) vinculada al ecosistema pro-Kremlin."
     if categoria == "EMPRESA":
-        return "Seguimiento corporativo: empresas estratégicas vinculadas a la defensa (Destinus, Oesía, etc.) frente a ciberamenazas o contratos bélicos."
+        return "Seguimiento corporativo frente a Rusia: ciberataques de grupos prorrusos (NoName057, Sandworm), contratos bélicos para Ucrania o tecnología de drones (Destinus, Oesía, Indra)."
     if categoria == "CRIMENES":
         return "Documentación de crímenes de guerra, ataques a población o infraestructuras civiles e investigaciones judiciales internacionales (CPI/ONU)."
     if categoria == "DETENCION":
@@ -639,31 +641,25 @@ def procesar_un_feed_rss(datos_feed):
 
 def barrido_prensa_multilingue():
     fuentes_rss = [
-        # Feeds de The Objective
         ("https://theobjective.com/feed/", "The Objective (General)"),
         ("https://theobjective.com/espana/feed/", "The Objective (España)"),
         ("https://theobjective.com/internacional/feed/", "The Objective (Internacional)"),
 
-        # Cobertura España y Seguridad
         ("https://news.google.com/rss/search?q=(Rusia+OR+ruso+OR+Kremlin+OR+NoName057+OR+APT28)+(España+OR+Madrid+OR+CNI+OR+INCIBE)+(sabotaje+OR+ciberataque+OR+espionaje+OR+amenaza)&hl=es&gl=ES&ceid=ES:es", "España Seguridad (ES)"),
         ("https://news.google.com/rss/search?q=(Russia+OR+Russian+OR+Kremlin)+(Spain+OR+Madrid)+(sabotage+OR+cyberattack+OR+spy+OR+espionage)&hl=en-US&gl=US&ceid=US:en", "Spain Watch (EN)"),
         
-        # Empresas Españolas (Reforzado el feed de Oesía/Tecnobit para recoger "amenaza" y "Valdepeñas")
-        ("https://news.google.com/rss/search?q=(Destinus+OR+\"Hornet+Block\"+OR+Kokorich)+(dron+OR+drones+OR+defensa+OR+Ucrania+OR+Armada+OR+España)&hl=es&gl=ES&ceid=ES:es", "Destinus / Drones (ES)"),
-        ("https://news.google.com/rss/search?q=(\"UAV+Navigation\"+OR+\"Grupo+Oesia\"+OR+Oesia+OR+Tecnobit)+(dron+OR+drones+OR+Ucrania+OR+defensa+OR+Rusia+OR+amenaza+OR+Valdepeñas)&hl=es&gl=ES&ceid=ES:es", "Oesía / UAV Navigation (ES)"),
-        ("https://news.google.com/rss/search?q=(Indra+OR+Navantia+OR+Escribano+OR+Sener+OR+Telefónica+OR+\"Santa+Barbara\"+OR+Instalaza)+(Rusia+OR+ciberataque+OR+sabotaje+OR+hackers+OR+defensa)&hl=es&gl=ES&ceid=ES:es", "Empresas Defensa España (ES)"),
+        # Consultas ultra-específicas para evitar que Google News omita Oesía/Tecnobit/Destinus
+        ("https://news.google.com/rss/search?q=(Tecnobit+OR+Oesia+OR+Valdepeñas+OR+Destinus+OR+Kokorich)+(Rusia+OR+amenaza+OR+Ucrania+OR+defensa)&hl=es&gl=ES&ceid=ES:es", "Empresas Defensa (ES)"),
+        ("https://news.google.com/rss/search?q=(Indra+OR+Navantia+OR+Escribano+OR+Sener+OR+Telefónica+OR+\"Santa+Barbara\"+OR+Instalaza)+(Rusia+OR+ciberataque+OR+sabotaje+OR+hackers)&hl=es&gl=ES&ceid=ES:es", "Empresas Defensa España (ES)"),
 
-        # Detenciones
         ("https://news.google.com/rss/search?q=(detenido+OR+arrestado+OR+detencion)+(espia+ruso+OR+sabotaje+ruso+OR+GRU+OR+FSB+OR+SVR)&hl=es&gl=ES&ceid=ES:es", "Detenciones (ES)"),
         ("https://news.google.com/rss/search?q=(arrested+OR+detained)+(Russian+spy+OR+Russian+sabotage+OR+GRU+OR+FSB)&hl=en-US&gl=US&ceid=US:en", "Detenciones (EN)"),
 
-        # Crímenes de Guerra y Civiles
         ("https://news.google.com/rss/search?q=(Rusia+OR+ruso+OR+tropas+rusas)+(\"crimen+de+guerra\"+OR+\"crimenes+de+guerra\"+OR+\"Corte+Penal\"+OR+\"ataque+a+civiles\"+OR+\"bombardeo+residencial\"+OR+\"prisioneros\")&hl=es&gl=ES&ceid=ES:es", "Crímenes Guerra (ES)"),
         ("https://news.google.com/rss/search?q=(Russia+OR+Russian+forces)+(\"war+crime\"+OR+\"war+crimes\"+OR+ICC+OR+\"civilian+casualties\"+OR+\"hospital+strike\"+OR+\"POW+execution\")&hl=en-US&gl=US&ceid=US:en", "War Crimes (EN)"),
         ("https://news.google.com/rss/search?q=(Rusia+OR+Ucrania)+(\"ejecucion\"+OR+\"tortura\"+OR+\"fosa+comun\"+OR+\"deportacion\")+civiles&hl=es&gl=ES&ceid=ES:es", "DDHH Conflicto (ES)"),
         ("https://news.google.com/rss/search?q=(Rusia+OR+Russian)+Ukraine+(\"strike+on+civilians\"+OR+\"residential+building\"+OR+\"massacre\")&hl=en-US&gl=US&ceid=US:en", "Civilian Strikes (EN)"),
 
-        # Inteligencia global y FININT
         ("https://news.google.com/rss/search?q=(Russia+OR+Ukraine)+(sabotage+OR+cyberattack+OR+espionage+OR+\"hybrid+warfare\"+OR+partisan)&hl=en-US&gl=US&ceid=US:en", "Intel Global (EN)"),
         ("https://news.google.com/rss/search?q=(Rusia+OR+Ucrania)+(sabotaje+OR+ciberataque+OR+espionaje+OR+\"guerra+hibrida\")&hl=es&gl=ES&ceid=ES:es", "Frente Global (ES)"),
         ("https://news.google.com/rss/search?q=(crypto+OR+bitcoin+OR+USDT+OR+Tether)+(Russia+OR+sanctions+OR+Garantex)&hl=en-US&gl=US&ceid=US:en", "FININT Cripto (EN)")
@@ -748,7 +744,7 @@ def ejecutar_actualizacion_total():
         else:
             titular_final = titular_limpio
             
-            # Cascada de categorización directa
+            # Cascada de categorización
             if es_empresa_esp(titular_limpio, cuerpo_intacto):
                 cat_final = "EMPRESA"
             elif es_cripto(titular_limpio, cuerpo_intacto):
