@@ -27,6 +27,31 @@ st.set_page_config(
 )
 
 # ==========================================
+# BLINDAJE VISUAL: OCULTAR GITHUB, PERFIL Y MENÚS
+# ==========================================
+st.markdown("""
+<style>
+    /* Ocultar barra superior y menú de Streamlit con enlace al código */
+    #MainMenu {visibility: hidden !important; display: none !important;}
+    header {visibility: hidden !important; display: none !important;}
+    
+    /* Ocultar pie de página ("Made with Streamlit") */
+    footer {visibility: hidden !important; display: none !important;}
+    
+    /* Ocultar barra flotante de Streamlit Cloud y badge con perfil de GitHub */
+    .viewerBadge_container__1QSob,
+    [data-testid="stStatusWidget"],
+    .viewerBadge_link__1QSob,
+    div[class*="viewerBadge"],
+    div[class*="stDecoration"],
+    div[class*="stToolbar"] {
+        visibility: hidden !important;
+        display: none !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# ==========================================
 # CONTROL DE ACCESO CON RECORDATORIO (CLAVE: GAD2026)
 # ==========================================
 CLAVE_SISTEMA = "GAD2026"
@@ -1040,7 +1065,7 @@ def toggle_checkbox_callback(item_id):
         st.session_state.seleccionadas_pdf.discard(item_id)
 
 # ==========================================
-# INTERFAZ STREAMLIT
+# ESTILOS E INTERFAZ STREAMLIT
 # ==========================================
 st.markdown("""
 <style>
@@ -1252,8 +1277,8 @@ def renderizar_tarjetas(lista_items):
             f'<div class="osint-flex">{media_html}'
             f'<div class="osint-body">'
             f'{badge_header}'
-            f'<div class="osint-title">{t_safe}</div>'
             f'{bloque_reporte}'
+            f'<div class="osint-title">{t_safe}</div>'
             f'<div class="osint-analisis"><strong>🧠 Análisis:</strong> {a_safe}</div>'
             f'<div style="display:flex;gap:10px;align-items:center;">'
             f'<a href="{enlace}" target="_blank" class="btn-source">🔗 ABRIR FUENTE ORIGINAL</a>'
@@ -1279,7 +1304,7 @@ def renderizar_tarjetas(lista_items):
             st.markdown(tarjeta_html, unsafe_allow_html=True)
 
 # ==========================================
-# PESTAÑAS (ORDEN EXACTO SOLICITADO)
+# PESTAÑAS (ORDEN SOLICITADO CON CHINA TRAS DETENCIONES)
 # ==========================================
 if "alertas_monitor" in st.session_state:
     l_esp = [x for x in datos_activos if x.get("categoria") == "ESPANA"]
