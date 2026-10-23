@@ -15,6 +15,58 @@ import pandas as pd
 import io
 
 # ==========================================
+# CONFIGURACIÓN DE PÁGINA STREAMLIT
+# ==========================================
+st.set_page_config(
+    page_title="Analizador de Amenazas Híbridas",
+    page_icon="🛡️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# ==========================================
+# CONTROL DE ACCESO CON RECORDATORIO (CLAVE: GAD2026)
+# ==========================================
+CLAVE_SISTEMA = "GAD2026"
+TOKEN_PERSISTENTE = "gad_auth_ok_2026"
+
+def gestionar_acceso():
+    if st.session_state.get("autenticado", False):
+        return True
+    
+    if st.query_params.get("auth") == TOKEN_PERSISTENTE:
+        st.session_state.autenticado = True
+        return True
+
+    st.markdown("""
+        <div style="max-width: 460px; margin: 40px auto 20px auto; padding: 25px; background: #0f172a; border-radius: 8px; border-left: 6px solid #dc2626; color: white;">
+            <h2 style="margin-top: 0; color: #ffffff; font-size: 20px;">🔒 Acceso Restringido</h2>
+            <p style="color: #94a3b8; font-size: 13.5px; margin-bottom: 0;">Sistema de Inteligencia de Amenazas Híbridas (OSINT). Introduzca la credencial autorizada para continuar.</p>
+        </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns([1, 1.2, 1])
+    with col2:
+        with st.form("form_login"):
+            clave_introducida = st.text_input("Clave de acceso:", type="password", placeholder="Introduce la contraseña...")
+            recordar_equipo = st.checkbox("Recordar acceso en este equipo", value=True)
+            boton_acceso = st.form_submit_button("INGRESAR AL SISTEMA", type="primary", use_container_width=True)
+
+            if boton_acceso:
+                if clave_introducida == CLAVE_SISTEMA:
+                    st.session_state.autenticado = True
+                    if recordar_equipo:
+                        st.query_params["auth"] = TOKEN_PERSISTENTE
+                    st.rerun()
+                else:
+                    st.error("Credencial no autorizada.")
+        
+    return False
+
+if not gestionar_acceso():
+    st.stop()
+
+# ==========================================
 # CONFIGURACIÓN DE SESIÓN HTTP Y CACHÉ
 # ==========================================
 SESION_HTTP = requests.Session()
@@ -166,9 +218,8 @@ def extraer_resumen_rss(tit_orig, desc_rss):
     return limpio[:1800] if len(limpio) > 25 else limpiar_firma_medio(tit_orig)
 
 # ==========================================
-# LISTA DE EMPRESAS Y FILTROS ESTRICTOS
+# LISTAS DE EMPRESAS Y FILTROS ESTRICTOS
 # ==========================================
-# Eliminada cualquier ciudad o término geográfico: SOLO empresas reales
 EMPRESAS_ESTRATEGICAS_ESP = [
     "destinus", "mikhail kokorich", "kokorich", "uav navigation",
     "grupo oesia", "oesia", "tecnobit", "indra", "navantia", "escribano",
@@ -222,7 +273,6 @@ def tiene_vinculo_ruso_estricto(texto):
     t_raw = str(texto).lower()
     t_norm = normalizar_texto(texto)
 
-    # Filtro anti-religioso
     if re.search(r'\b(papa|vaticano|santa sede|iglesia|obispo|pontifice|francisco|leon xiv)\b', t_norm) and not re.search(r'\b(ciberataque|sabotaje|espionaje|hack|ddos)\b', t_norm):
         return False
 
@@ -268,21 +318,14 @@ def tiene_vector_amenaza_estricto(texto):
 # CATEGORIZACIÓN (VÍNCULO OBLIGATORIO CON RUSIA)
 # ==========================================
 def es_empresa_esp(titular, cuerpo):
-    """
-    Exige:
-    1. Empresa española nombrada O mención explícita a empresa/industria española.
-    2. Vínculo DIRECTO e INNEGOCIABLE con Rusia, Ucrania o amenazas híbridas.
-    """
     t_all = normalizar_texto(desparasitar_nombres_medios(f"{titular} {cuerpo}"))
     
-    # Comprobar mención a empresa concreta O a empresa española en general
     menciona_empresa_concreta = any(re.search(r'\b' + re.escape(emp) + r'\b', t_all) for emp in EMPRESAS_ESTRATEGICAS_ESP)
     menciona_empresa_generica = bool(re.search(r'\b(empresa espanola|empresas espanolas|filial espanola|sede en valdepe[nñ]as|industria de defensa espanola)\b', t_all))
     
     if not (menciona_empresa_concreta or menciona_empresa_generica):
         return False
         
-    # CONDICIÓN OBLIGATORIA: Vínculo con el conflicto ruso o guerra híbrida
     patron_vinculo_rusia = r'\b(' \
                            r'rusia|ruso|rusa|rusos|moscu|kremlin|putin|' \
                            r'ucrania|ucraniano|ucraniana|frente|zelensky|' \
@@ -646,7 +689,7 @@ def barrido_prensa_multilingue():
         ("https://news.google.com/rss/search?q=(Rusia+OR+ruso+OR+Kremlin+OR+NoName057+OR+APT28)+(España+OR+Madrid+OR+CNI+OR+INCIBE)+(sabotaje+OR+ciberataque+OR+espionaje+OR+amenaza)&hl=es&gl=ES&ceid=ES:es", "España Seguridad (ES)"),
         ("https://news.google.com/rss/search?q=(Russia+OR+Russian+OR+Kremlin)+(Spain+OR+Madrid)+(sabotage+OR+cyberattack+OR+spy+OR+espionage)&hl=en-US&gl=US&ceid=US:en", "Spain Watch (EN)"),
         
-        # BÚSQUEDA CRUZADA EMPRESA ESPAÑOLA + RUSIA / AMENAZAS (incluyendo el caso de CMMedia y Destinus)
+        # BÚSQUEDA CRUZADA EXACTA: EMPRESA ESPAÑOLA + AMENAZA RUSA
         ("https://news.google.com/rss/search?q=(\"empresas+amenazadas+por+rusia\"+OR+\"empresa+amenazada+por+rusia\"+OR+(Tecnobit+OR+Oesia+OR+Destinus+OR+Indra+OR+Navantia+OR+Escribano)+AND+(Rusia+OR+Kremlin+OR+Putin+OR+amenaza))&hl=es&gl=ES&ceid=ES:es", "Empresas Amenazadas (ES)"),
         ("https://news.google.com/rss/search?q=(Destinus+OR+Kokorich)+(Rusia+OR+Ucrania+OR+drones+OR+frente)&hl=es&gl=ES&ceid=ES:es", "Destinus / Drones (ES)"),
 
@@ -697,7 +740,6 @@ def ejecutar_actualizacion_total():
         brutos_antikor = f_antikor.result()
 
     todos_brutos = brutos_tg + brutos_yt + brutos_prensa + brutos_rumafia + brutos_antikor
-    # Orden cronológico descendente
     todos_brutos.sort(key=lambda x: x["fecha_dt"], reverse=True)
 
     pre_unicos = []
@@ -742,7 +784,7 @@ def ejecutar_actualizacion_total():
         else:
             titular_final = titular_limpio
             
-            # Cascada de categorización estricta:
+            # Cascada de categorización estricta
             if es_empresa_esp(titular_limpio, cuerpo_intacto):
                 cat_final = "EMPRESA"
             elif es_cripto(titular_limpio, cuerpo_intacto):
@@ -943,13 +985,6 @@ def toggle_checkbox_callback(item_id):
 # ==========================================
 # INTERFAZ STREAMLIT
 # ==========================================
-st.set_page_config(
-    page_title="Analizador de Amenazas Híbridas",
-    page_icon="🛡️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
 st.markdown("""
 <style>
     .main { background-color: #0b0f19; }
