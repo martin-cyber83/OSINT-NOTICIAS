@@ -13,7 +13,6 @@ from difflib import SequenceMatcher
 from urllib.parse import urlparse, urlunparse
 import pandas as pd
 import io
-from collections import Counter
 
 # ==========================================
 # CONFIGURACIÓN DE SESIÓN HTTP Y CACHÉ
@@ -46,12 +45,9 @@ def normalizar_texto(texto):
 def limpiar_firma_medio(texto):
     if not texto:
         return ""
-    # Quita firmas de periódicos al final (ej. - MarketScreener España, - Libertad Digital)
-    t = re.sub(r'\s*[-–|·]\s*[^-–|·]{2,60}$', '', str(texto)).strip()
-    return t
+    return re.sub(r'\s*[-–|·]\s*[^-–|·]{2,60}$', '', str(texto)).strip()
 
 def desparasitar_nombres_medios(texto):
-    """Elimina menciones a periódicos que contaminan la categorización geográfica."""
     t = str(texto)
     patrones_medios = [
         r'marketscreener\s*espa[nñ]a', r'libertad\s*digital', r'el\s*confidencial',
@@ -177,7 +173,8 @@ EMPRESAS_ESTRATEGICAS_ESP = [
     "expal", "rheinmetall expal", "instalaza", "sapla", "urovesa", "itp aero",
     "airbus espana", "airbus getafe", "hisdesat", "hispasat", "sateliot", "pld space",
     "amadeus", "aena", "enaire", "renfe", "adif", "telefonica", "iberdrola",
-    "repsol", "naturgy", "redeia", "red electrica", "enagas", "talgo"
+    "repsol", "naturgy", "redeia", "red electrica", "enagas", "talgo", "ferrovial",
+    "cepsa", "moeve", "iberia", "applus"
 ]
 
 CANALES_DESINFORMACION_ESP = {
@@ -260,7 +257,7 @@ def tiene_vector_amenaza_estricto(texto):
     return any(v in t_norm for v in vectores_latinos)
 
 # ==========================================
-# CATEGORIZACIÓN CORREGIDA Y BLINDADA
+# CATEGORIZACIÓN
 # ==========================================
 def es_cripto(titular, cuerpo):
     t_all = normalizar_texto(f"{titular} {cuerpo}")
@@ -287,12 +284,10 @@ def es_detencion(titular, cuerpo):
     return bool(re.search(patron_det, t_all))
 
 def es_empresa_esp(titular, cuerpo):
-    # Evaluado sobre texto sin nombres de medios
     t_all = normalizar_texto(desparasitar_nombres_medios(f"{titular} {cuerpo}"))
     return any(re.search(r'\b' + re.escape(emp) + r'\b', t_all) for emp in EMPRESAS_ESTRATEGICAS_ESP)
 
 def es_espana(titular, cuerpo):
-    """Filtro de España inmune a firmas de medios (MarketScreener España, etc.)."""
     texto_limpio = desparasitar_nombres_medios(f"{titular} {cuerpo}")
     t_norm = normalizar_texto(texto_limpio)
 
@@ -307,34 +302,10 @@ def es_espana(titular, cuerpo):
     if not re.search(patron_esp, t_norm):
         return False
 
-    # Descartar si solo habla de otros países sin vinculación con España
     if re.search(r'\b(en ucrania|en rusia|en polonia|en alemania|en dinamarca)\b', t_norm) and not re.search(r'\b(militares espanoles|cni|espana|gobierno espanol)\b', t_norm):
         return False
 
     return True
-
-def calcular_puntuacion_severidad(categoria, titular, cuerpo):
-    t_all = normalizar_texto(f"{titular} {cuerpo}")
-    score = 2
-
-    if categoria in ["ESPANA", "EMPRESA"]:
-        score = 4
-        if re.search(r'\b(sabotaje|ciberataque|infiltrado|infraestructura critica|red electrica|cni|defensa)\b', t_all):
-            score = 5
-    elif categoria in ["DETENCION", "CRIMENES"]:
-        score = 4
-    elif categoria == "CRIPTO":
-        score = 3
-    elif categoria in ["TELEGRAM", "REDES"]:
-        if re.search(r'\b(ofensiva|misil|nuclear|sabotaje|bpla|shahed|dron|frente)\b', t_all):
-            score = 3
-        else:
-            score = 2
-
-    if re.search(r'\b(cable submarino|flota fantasma|nord stream|otan|baltico)\b', t_all):
-        score = max(score, 4)
-
-    return score
 
 def generar_analisis_contexto(categoria, canal=""):
     canal_clean = canal.replace("@", "")
@@ -419,7 +390,7 @@ def barrido_canales_youtube():
     return todas
 
 # ==========================================
-# RASTREADOR TELEGRAM (ZVINCHUK Y SHARIJ EN REDES)
+# RASTREADOR TELEGRAM
 # ==========================================
 def raspar_un_canal_tg(canal):
     mensajes = []
@@ -430,7 +401,6 @@ def raspar_un_canal_tg(canal):
         soup = BeautifulSoup(r.text, "html.parser")
         posts = soup.find_all("div", class_="tgme_widget_message_wrap")
 
-        # Tanto Anatolii Sharij como Mijaíl Zvinchuk (@rybar) se catalogan como REDES
         es_red_social = canal in ["ASupersharij", "rybar"]
 
         for p in posts[-35:]:
@@ -650,7 +620,7 @@ def procesar_un_feed_rss(datos_feed):
 
 def barrido_prensa_multilingue():
     fuentes_rss = [
-        # Feeds nativos de The Objective
+        # Feeds de The Objective
         ("https://theobjective.com/feed/", "The Objective (General)"),
         ("https://theobjective.com/espana/feed/", "The Objective (España)"),
         ("https://theobjective.com/internacional/feed/", "The Objective (Internacional)"),
@@ -658,13 +628,15 @@ def barrido_prensa_multilingue():
         # Cobertura España y Seguridad
         ("https://news.google.com/rss/search?q=(Rusia+OR+ruso+OR+Kremlin+OR+NoName057+OR+APT28)+(España+OR+Madrid+OR+CNI+OR+INCIBE)+(sabotaje+OR+ciberataque+OR+espionaje+OR+amenaza)&hl=es&gl=ES&ceid=ES:es", "España Seguridad (ES)"),
         ("https://news.google.com/rss/search?q=(Russia+OR+Russian+OR+Kremlin)+(Spain+OR+Madrid)+(sabotage+OR+cyberattack+OR+spy+OR+espionage)&hl=en-US&gl=US&ceid=US:en", "Spain Watch (EN)"),
-        ("https://news.google.com/rss/search?q=(Indra+OR+Navantia+OR+Escribano+OR+Sener+OR+Telefónica+OR+Iberdrola)+(Rusia+OR+ciberataque+OR+sabotaje+OR+hackers)&hl=es&gl=ES&ceid=ES:es", "Empresas España (ES)"),
+        
+        # Búsqueda reforzada de Empresas Españolas de Defensa y Estratégicas
+        ("https://news.google.com/rss/search?q=(Indra+OR+Navantia+OR+Escribano+OR+Sener+OR+Telefónica+OR+Iberdrola+OR+\"Santa+Barbara\"+OR+Oesia+OR+Instalaza+OR+Repsol)+(Rusia+OR+ciberataque+OR+sabotaje+OR+hackers+OR+defensa)&hl=es&gl=ES&ceid=ES:es", "Empresas España (ES)"),
 
         # Detenciones
         ("https://news.google.com/rss/search?q=(detenido+OR+arrestado+OR+detencion)+(espia+ruso+OR+sabotaje+ruso+OR+GRU+OR+FSB+OR+SVR)&hl=es&gl=ES&ceid=ES:es", "Detenciones (ES)"),
         ("https://news.google.com/rss/search?q=(arrested+OR+detained)+(Russian+spy+OR+Russian+sabotage+OR+GRU+OR+FSB)&hl=en-US&gl=US&ceid=US:en", "Detenciones (EN)"),
 
-        # Crímenes de Guerra y Ataques a Civiles
+        # Crímenes de Guerra y Civiles
         ("https://news.google.com/rss/search?q=(Rusia+OR+ruso+OR+tropas+rusas)+(\"crimen+de+guerra\"+OR+\"crimenes+de+guerra\"+OR+\"Corte+Penal\"+OR+\"ataque+a+civiles\"+OR+\"bombardeo+residencial\"+OR+\"prisioneros\")&hl=es&gl=ES&ceid=ES:es", "Crímenes Guerra (ES)"),
         ("https://news.google.com/rss/search?q=(Russia+OR+Russian+forces)+(\"war+crime\"+OR+\"war+crimes\"+OR+ICC+OR+\"civilian+casualties\"+OR+\"hospital+strike\"+OR+\"POW+execution\")&hl=en-US&gl=US&ceid=US:en", "War Crimes (EN)"),
         ("https://news.google.com/rss/search?q=(Rusia+OR+Ucrania)+(\"ejecucion\"+OR+\"tortura\"+OR+\"fosa+comun\"+OR+\"deportacion\")+civiles&hl=es&gl=ES&ceid=ES:es", "DDHH Conflicto (ES)"),
@@ -710,6 +682,7 @@ def ejecutar_actualizacion_total():
         brutos_antikor = f_antikor.result()
 
     todos_brutos = brutos_tg + brutos_yt + brutos_prensa + brutos_rumafia + brutos_antikor
+    # Orden puramente cronológico
     todos_brutos.sort(key=lambda x: x["fecha_dt"], reverse=True)
 
     pre_unicos = []
@@ -742,8 +715,6 @@ def ejecutar_actualizacion_total():
     for item, tit_es in zip(pre_unicos, titulares_traducidos):
         cuerpo_intacto = item["cuerpo_raw"]
         plat = item["plataforma"]
-
-        # Se limpia la firma del medio del titular visible (ej: - MarketScreener España)
         titular_limpio = limpiar_firma_medio(tit_es)
 
         if plat == "REDES":
@@ -756,7 +727,7 @@ def ejecutar_actualizacion_total():
         else:
             titular_final = titular_limpio
 
-            # Cascada de categorización estricta:
+            # Cascada lógica de clasificación
             if es_cripto(titular_limpio, cuerpo_intacto):
                 cat_final = "CRIPTO"
             elif es_detencion(titular_limpio, cuerpo_intacto):
@@ -770,8 +741,6 @@ def ejecutar_actualizacion_total():
             else:
                 cat_final = "GLOBAL"
 
-        severidad = calcular_puntuacion_severidad(cat_final, titular_final, cuerpo_intacto)
-
         nueva_alerta = {
             "id": item["id"],
             "plataforma": plat,
@@ -781,7 +750,6 @@ def ejecutar_actualizacion_total():
             "titular": titular_final,
             "titular_original": item["titular_raw"],
             "categoria": cat_final,
-            "severidad": severidad,
             "hecho_reportado": cuerpo_intacto,
             "evaluacion_contexto": generar_analisis_contexto(cat_final, canal=item["canal"]),
             "multimedia": item.get("multimedia"),
@@ -791,7 +759,8 @@ def ejecutar_actualizacion_total():
 
         alertas_finales.append(nueva_alerta)
 
-    alertas_finales.sort(key=lambda x: (x["severidad"], x["fecha_dt"]), reverse=True)
+    # Orden cronológico descendente
+    alertas_finales.sort(key=lambda x: x["fecha_dt"], reverse=True)
 
     st.session_state.alertas_monitor = alertas_finales
     st.session_state.ultima_actualizacion = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M:%S UTC")
@@ -800,7 +769,7 @@ def ejecutar_actualizacion_total():
         st.session_state[f"sel_{a['id']}"] = True
 
 # ==========================================
-# EXPORTACIÓN CSV
+# EXPORTACIÓN CSV (SIN COLUMNA SEVERIDAD)
 # ==========================================
 def exportar_alertas_csv(alertas):
     if not alertas:
@@ -809,7 +778,6 @@ def exportar_alertas_csv(alertas):
     for a in alertas:
         filas.append({
             "Fecha (UTC)": a["fecha_dt"].strftime("%Y-%m-%d %H:%M"),
-            "Severidad (1-5)": a["severidad"],
             "Categoría": a["categoria"],
             "Plataforma": a.get("plataforma", ""),
             "Canal/Fuente": a["canal"],
@@ -887,7 +855,6 @@ def generar_html_ejecutivo(alertas, solo_48h=False):
         }}
         .card h3 {{ margin: 0 0 4px 0; font-size: 13px; color: #0f172a; }}
         .meta {{ font-size: 10px; color: #64748b; font-weight: 700; margin-bottom: 4px; }}
-        .tag-sev {{ background: #0f172a; color: #ffffff; padding: 1px 5px; border-radius: 2px; font-weight: 800; }}
         .cuerpo-box {{
             background: #f8fafc; border: 1px solid #e2e8f0; padding: 6px 8px;
             font-size: 11px; color: #1e293b; margin-bottom: 4px; text-align: justify;
@@ -925,13 +892,12 @@ def generar_html_ejecutivo(alertas, solo_48h=False):
             fecha_str = a.get('fecha_dt').strftime('%d/%m/%Y %H:%M')
             canal = html_module.escape(str(a.get('canal', '')))
             enlace = html_module.escape(str(a.get('enlace', '#')))
-            sev = a.get('severidad', 2)
 
             cuerpo_html = f'<div class="cuerpo-box"><strong>Reporte:</strong> {hecho}</div>' if a.get("categoria") in ["TELEGRAM", "REDES"] else ""
 
             html += f"""
             <div class="card" style="border-left-color: {cat_color};">
-                <div class="meta"><span class="tag-sev">CRITICIDAD {sev}/5</span> | 📅 {fecha_str} UTC | 📢 {canal}</div>
+                <div class="meta">📅 {fecha_str} UTC | 📢 {canal}</div>
                 <h3>{tit}</h3>
                 {cuerpo_html}
                 <div class="analisis-box"><strong>Evaluación:</strong> {ana}</div>
@@ -979,20 +945,13 @@ st.markdown("""
         border-radius: 10px;
         border-left: 10px solid #dc2626;
         border-bottom: 2px solid #334155;
-        margin-bottom: 14px;
+        margin-bottom: 16px;
         display: flex;
         align-items: center;
         gap: 18px;
     }
     .header-text h1 { color: #ffffff; margin: 0; font-size: 26px !important; font-weight: 900; text-transform: uppercase; }
     .header-text p { color: #cbd5e1; font-size: 14px !important; margin: 3px 0 0 0; }
-
-    .kpi-card {
-        background-color: #1e293b; border: 1px solid #334155; border-radius: 8px;
-        padding: 10px 14px; text-align: center; color: #ffffff;
-    }
-    .kpi-num { font-size: 22px; font-weight: 900; color: #38bdf8; margin: 0; }
-    .kpi-label { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; margin: 0; }
 
     button[data-baseweb="tab"] {
         font-size: 12px !important; font-weight: 800 !important;
@@ -1059,7 +1018,7 @@ if "seleccionadas_pdf" not in st.session_state:
 alertas_totales = st.session_state.get("alertas_monitor", [])
 
 # ==========================================
-# BARRA LATERAL (FILTROS Y BÚSQUEDA AVANZADA)
+# BARRA LATERAL (SIN SEVERIDAD)
 # ==========================================
 with st.sidebar:
     st.subheader("🔍 Filtros de Búsqueda")
@@ -1067,8 +1026,6 @@ with st.sidebar:
     
     canales_disponibles = sorted(list({a["canal"] for a in alertas_totales}))
     canales_sel = st.multiselect("Filtrar por canal/fuente:", canales_disponibles, default=[])
-    
-    nivel_severidad_min = st.slider("Severidad mínima:", min_value=1, max_value=5, value=1)
     
     st.write("---")
     st.subheader("📊 Exportación")
@@ -1093,54 +1050,6 @@ if busqueda_txt:
 if canales_sel:
     datos_filtrados = [x for x in datos_filtrados if x["canal"] in canales_sel]
 
-if nivel_severidad_min > 1:
-    datos_filtrados = [x for x in datos_filtrados if x.get("severidad", 1) >= nivel_severidad_min]
-
-# ==========================================
-# PANEL DE CONTROL EJECUTIVO (KPIS Y RADAR)
-# ==========================================
-datos_activos = datos_filtrados
-solo_48h = False
-
-c_kpi1, c_kpi2, c_kpi3, c_kpi4, c_kpi5 = st.columns(5)
-with c_kpi1:
-    st.markdown(f'<div class="kpi-card"><p class="kpi-num">{len(datos_activos)}</p><p class="kpi-label">Alertas Totales</p></div>', unsafe_allow_html=True)
-with c_kpi2:
-    sev_altas = len([x for x in datos_activos if x.get("severidad", 1) >= 4])
-    st.markdown(f'<div class="kpi-card"><p class="kpi-num" style="color:#ef4444;">{sev_altas}</p><p class="kpi-label">Criticidad Alta (4-5)</p></div>', unsafe_allow_html=True)
-with c_kpi3:
-    tot_esp = len([x for x in datos_activos if x.get("categoria") in ["ESPANA", "EMPRESA"]])
-    st.markdown(f'<div class="kpi-card"><p class="kpi-num" style="color:#f59e0b;">{tot_esp}</p><p class="kpi-label">Foco España / Defensa</p></div>', unsafe_allow_html=True)
-with c_kpi4:
-    tot_fimi = len([x for x in datos_activos if x.get("canal", "").replace("@", "") in CANALES_DESINFORMACION_ESP])
-    st.markdown(f'<div class="kpi-card"><p class="kpi-num" style="color:#ec4899;">{tot_fimi}</p><p class="kpi-label">FIMI / Desinformación</p></div>', unsafe_allow_html=True)
-with c_kpi5:
-    tot_multimedia = len([x for x in datos_activos if x.get("multimedia") or x.get("tiene_video")])
-    st.markdown(f'<div class="kpi-card"><p class="kpi-num" style="color:#10b981;">{tot_multimedia}</p><p class="kpi-label">Con Multimedia/Vídeo</p></div>', unsafe_allow_html=True)
-
-st.write("")
-
-# Desplegable visual de análisis de datos (Radar de Términos y Distribución)
-with st.expander("📈 Panel de Análisis de Inteligencia y Tendencias (Clic para desplegar)", expanded=False):
-    col_chart1, col_chart2 = st.columns([1.2, 1.0])
-    with col_chart1:
-        st.caption("📊 Distribución de Alertas por Categoría Táctica")
-        conteo_cats = Counter([x.get("categoria", "GLOBAL") for x in datos_activos])
-        df_cats = pd.DataFrame(list(conteo_cats.items()), columns=["Categoría", "Cantidad"]).set_index("Categoría")
-        st.bar_chart(df_cats, color="#dc2626")
-
-    with col_chart2:
-        st.caption("🏷️ Términos Más Frecuentes Detectados (Hot Topics)")
-        palabras_ignorar = {"para", "como", "sobre", "este", "entre", "rusia", "ruso", "rusa", "ucrania", "segun", "esta", "estos", "desde"}
-        todas_palabras = []
-        for x in datos_activos:
-            tokens = re.findall(r'\b[a-zA-Záéíóúñ]{4,15}\b', normalizar_texto(x.get("titular", "")))
-            todas_palabras.extend([w for w in tokens if w not in palabras_ignorar])
-        top_words = Counter(todas_palabras).most_common(12)
-        if top_words:
-            df_words = pd.DataFrame(top_words, columns=["Término Táctico", "Frecuencia"]).set_index("Término Táctico")
-            st.dataframe(df_words, use_container_width=True)
-
 # ==========================================
 # BOTONERA SUPERIOR
 # ==========================================
@@ -1155,9 +1064,7 @@ with col_btn1:
 with col_filtro:
     solo_48h = st.checkbox("🔥 Solo Últimas 48h", value=False)
 
-if solo_48h:
-    datos_activos = [x for x in datos_filtrados if es_reciente_48h(x.get("fecha_dt"))]
-
+datos_activos = [x for x in datos_filtrados if es_reciente_48h(x.get("fecha_dt"))] if solo_48h else datos_filtrados
 alertas_para_informe = [x for x in datos_activos if x.get("id") in st.session_state.seleccionadas_pdf]
 
 with col_btn2:
@@ -1186,7 +1093,7 @@ with c_sel2:
 st.write("")
 
 # ==========================================
-# RENDERIZADO DE ALERTAS
+# RENDERIZADO DE ALERTAS (SIN BADGE SEVERIDAD)
 # ==========================================
 def renderizar_tarjetas(lista_items):
     if not lista_items:
@@ -1196,7 +1103,6 @@ def renderizar_tarjetas(lista_items):
         item_id = item.get("id")
         cat = item.get("categoria", "GLOBAL")
         canal_nombre = item.get("canal", "")
-        sev = item.get("severidad", 2)
         es_desinfo = canal_nombre.replace("@", "") in CANALES_DESINFORMACION_ESP
 
         b_color = {
@@ -1205,18 +1111,18 @@ def renderizar_tarjetas(lista_items):
             "TELEGRAM": "#0284c7", "REDES": "#059669"
         }.get(cat, "#0f172a")
 
-        sev_color = "#dc2626" if sev >= 4 else ("#d97706" if sev == 3 else "#475569")
-
-        badges = f'<span class="badge-item" style="background:{sev_color};color:#ffffff;">SEVERIDAD {sev}/5</span>'
+        badges = ""
         if es_reciente_48h(item.get("fecha_dt")):
-            badges += '<span class="badge-item" style="background:#fef08a;color:#854d0e;border:1px solid #eab308;margin-left:6px;">🔥 RELEVANTE (48H)</span>'
+            badges += '<span class="badge-item" style="background:#fef08a;color:#854d0e;border:1px solid #eab308;">🔥 RELEVANTE (48H)</span>'
 
         if es_desinfo:
-            badges += '<span class="badge-item" style="background:#ffe4e6;color:#be123c;border:1px solid #fda4af;margin-left:6px;">📢 DESINFORMACIÓN / FIMI</span>'
+            sep = 'margin-left:6px;' if badges else ''
+            badges += f'<span class="badge-item" style="background:#ffe4e6;color:#be123c;border:1px solid #fda4af;{sep}">📢 DESINFORMACIÓN / FIMI</span>'
 
         correlacionados = item.get("canales_correlacionados", [])
         if len(correlacionados) > 1:
-            badges += f'<span class="badge-item" style="background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;margin-left:6px;">🔄 DIFUNDIDO EN {len(correlacionados)} FUENTES</span>'
+            sep = 'margin-left:6px;' if badges else ''
+            badges += f'<span class="badge-item" style="background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;{sep}">🔄 DIFUNDIDO EN {len(correlacionados)} FUENTES</span>'
 
         fecha_str = item.get("fecha_dt").strftime("%d/%m/%Y %H:%M")
         t_safe = html_module.escape(str(item.get("titular", "")))
@@ -1232,11 +1138,13 @@ def renderizar_tarjetas(lista_items):
 
         bloque_reporte = f'<div class="osint-resumen"><strong>📄 Reporte/Post:</strong><br>{h_safe}</div>' if cat in ["TELEGRAM", "REDES"] else ""
 
+        badge_header = f'<div style="margin-bottom:8px;">{badges}<span style="font-size:12px;color:#64748b;margin-left:8px;">📅 {fecha_str} UTC | 📢 {canal_safe}</span></div>' if badges else f'<div style="margin-bottom:8px;"><span style="font-size:12px;color:#64748b;">📅 {fecha_str} UTC | 📢 {canal_safe}</span></div>'
+
         tarjeta_html = (
             f'<div class="osint-card" style="border-left: 8px solid {b_color};">'
             f'<div class="osint-flex">{media_html}'
             f'<div class="osint-body">'
-            f'<div style="margin-bottom:8px;">{badges}<span style="font-size:12px;color:#64748b;margin-left:10px;">📅 {fecha_str} UTC | 📢 {canal_safe}</span></div>'
+            f'{badge_header}'
             f'<div class="osint-title">{t_safe}</div>'
             f'{bloque_reporte}'
             f'<div class="osint-analisis"><strong>🧠 Análisis:</strong> {a_safe}</div>'
