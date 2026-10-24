@@ -17,6 +17,8 @@ import threading
 from difflib import SequenceMatcher
 from urllib.parse import urlparse, urlunparse
 import pandas as pd
+import time
+import random
 
 # ==========================================
 # CONFIGURACIÓN GENERAL STREAMLIT
@@ -67,7 +69,7 @@ components.html("""
 """, height=0, width=0)
 
 # ==========================================
-# CONTROL DE ACCESO SEGURO (SIN BYPASS EN URL)
+# CONTROL DE ACCESO SEGURO
 # ==========================================
 CLAVE_SISTEMA = st.secrets.get("GAD_PASSWORD", "GAD2026")
 
@@ -98,22 +100,22 @@ if not gestionar_acceso():
     st.stop()
 
 # ==========================================
-# CLIENTE HTTP ROBUSTO Y POOL DE CONEXIONES
+# CLIENTE HTTP ROBUSTO
 # ==========================================
 SESION_HTTP = requests.Session()
-adapter = HTTPAdapter(pool_connections=80, pool_maxsize=80, max_retries=1)
+adapter = HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=2)
 SESION_HTTP.mount("https://", adapter)
 SESION_HTTP.mount("http://", adapter)
 SESION_HTTP.headers.update({
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8,ru;q=0.7,uk;q=0.7,pl;q=0.6,zh;q=0.5"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 })
 
-CACHE_TITULARES_GLOBAL = {}
+if "cache_traducciones" not in st.session_state:
+    st.session_state.cache_traducciones = {}
 CACHE_LOCK = threading.Lock()
 
 # ==========================================
-# MATRICES COMPLETAS DE INTELIGENCIA Y FUENTES
+# LISTAS Y MATRICES DE INTELIGENCIA
 # ==========================================
 CANALES_DESINFORMACION_ESP = {
     "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu", "ASupersharij"
@@ -126,56 +128,19 @@ EMPRESAS_ESTRATEGICAS_ESP = [
     "telefonica", "iberdrola", "repsol", "naturgy", "redeia", "red electrica", "enagas", "talgo"
 ]
 
-PATRON_RUSIA_ESTRICTO = re.compile(
-    r'\b('
-    r'rusia|ruso|rusa|rusos|rusas|moscu|kremlin|putin|mod rf|fuerzas armadas rusas|'
-    r'russia|russian|russians|moscow|russie|russe|russland|russisch|'
-    r'gru|fsb|svr|apt28|apt29|fancy bear|cozy bear|sandworm|noname057|killnet|turla|gamaredon|cyberarmyofrussia|garantex|wagner|'
-    r'bielorrusia|belarus|kaliningrado|kaliningrad|lukashenko|'
-    r'ucrania|ucraniano|ucraniana|ucranianos|ukraine|ukrainian|zelensky|zelenski|zsu|vsu|sbu|gur|'
-    r'kursk|belgorod|donbas|donbass|crimea|zaporiyia|zaporizhzhia|kherson|donetsk|lugansk|luhansk|jarkov|kharkiv|shariy|sharij|zvinchuk|rybar|'
-    r'chechenia|kadyrov|transnistria|moldavia|georgia|abjasia|osetia|kazajistan|uzbekistan|tayikistan'
-    r')\b', re.IGNORECASE
-)
-
-RAICES_CIRILICO = [
-    "росси", "рф", "москв", "кремл", "путин", "гру", "фсб", "свр",
-    "украин", "киев", "київ", "зсу", "всу", "сбу", "гур", "донбасс",
-    "крым", "беларус", "вагнер", "шахед", "геран", "искандер", "шарий", "рыбарь", "звинчук"
-]
-
-PATRON_CHINA = re.compile(
-    r'\b('
-    r'china|chino|chinos|chinas|pekin|beijing|xi jinping|partido comunista chino|pcc|'
-    r'pla|ejercito popular de liberacion|taiwan|taipei|canton|hong kong|'
-    r'apt41|volt typhoon|flax typhoon|mustang panda|salt typhoon|mss|ministerio de seguridad del estado|'
-    r'ciberespionaje chino|injerencia china|injerencia de pekin|espionaje chino|comisarias chinas|estaciones de policia chinas'
-    r')\b', re.IGNORECASE
-)
-
+PATRON_CHINA = re.compile(r'\b(china|chino|chinos|chinas|pekin|beijing|xi jinping|pcc|pla|taiwan|taipei|canton|hong kong|apt41|volt typhoon|flax typhoon|mustang panda|salt typhoon|mss|ciberespionaje chino|injerencia china)\b', re.IGNORECASE)
 RAICES_CHINO = ["中国", "北京", "习近平", "解放军", "台湾", "华为", "国安部", "间谍"]
-RAICES_ARABE = ["روسيا", "أوكرانيا", "الصين", "بوتين", "تجسس", "طائرات مسيرة"]
-RAICES_POLACO = ["rosja", "rosyjski", "ukraina", "putin", "sabotaż", "szpiegostwo", "dywersja", "abw", "służby"]
-
-PATRON_PAISES_AJENOS = re.compile(
-    r'\b('
-    r'cuba|cubano|cubana|cubanos|la habana|castro|diaz-canel|'
-    r'venezuela|venezolano|venezolana|maduro|caracas|'
-    r'nicaragua|ortega|managua|colombia|petro|bogota|'
-    r'gaza|hamas|hezbollah|hezbola|netanyahu|tel aviv|cisjordania|palestina|palestino|israel|israeli|'
-    r'yemen|huti|huties|iran|irani|teheran|siria|damasco'
-    r')\b', re.IGNORECASE
-)
+RAICES_CIRILICO = ["росси", "рф", "москв", "кремл", "путин", "гру", "фсб", "свр", "украин", "киев", "зсу", "сбу", "вагнер", "шахед", "геран", "диверси"]
+RAICES_ARABE = ["روسيا", "أوكرانيا", "الصين", "بوتين", "تجسس"]
+RAICES_POLACO = ["rosja", "rosyjski", "ukraina", "putin", "sabotaż", "szpiegostwo", "dywersja", "abw"]
 
 # ==========================================
-# SANITIZACIÓN Y NORMALIZACIÓN
+# SANITIZACIÓN Y UTILIDADES
 # ==========================================
 def limpiar_html_texto(texto):
     if not texto: return ""
     t = re.sub(r'<[^<]+?>', ' ', str(texto))
     t = html_module.unescape(t)
-    t = re.sub(r'&[a-zA-Z0-9#]+;', ' ', t)
-    t = re.sub(r'(?i)(suscr[ií]bete a nuestro bolet[ií]n|lee m[aá]s en|copyright|todos los derechos reservados|pincha aqu[ií]|sigue leyendo).*', '', t)
     return re.sub(r'\s+', ' ', t).strip()
 
 def normalizar_texto(texto):
@@ -184,18 +149,6 @@ def normalizar_texto(texto):
 
 def limpiar_firma_medio(texto):
     return re.sub(r'\s*[-–|·]\s*[^-–|·]{2,60}$', '', str(texto)).strip() if texto else ""
-
-def desparasitar_nombres_medios(texto):
-    t = str(texto)
-    patrones_medios = [
-        r'marketscreener\s*espa[nñ]a', r'libertad\s*digital', r'el\s*confidencial',
-        r'el\s*periodico', r'el\s*pais', r'el\s*mundo', r'la\s*razon', r'the\s*objective',
-        r'europa\s*press', r'agencia\s*efe', r'rtve', r'investigative\s*journalism\s*foundation',
-        r'24horas', r'responsible\s*statecraft', r'aleteia(\.org)?', r'vatican\s*news', r'cmmedia'
-    ]
-    for p in patrones_medios:
-        t = re.sub(p, ' ', t, flags=re.IGNORECASE)
-    return re.sub(r'\s+', ' ', t).strip()
 
 def limpiar_url(url):
     try:
@@ -210,7 +163,7 @@ def id_determinista(url):
     return hashlib.sha256(url.encode('utf-8')).hexdigest()[:16]
 
 # ==========================================
-# FILTROS DE SEGURIDAD Y ANTI-RUIDO
+# FILTROS DE SEGURIDAD Y RELEVANCIA
 # ==========================================
 def cumple_ventana_temporal(fecha_dt, horas):
     if not fecha_dt: return False
@@ -223,7 +176,7 @@ def es_publicidad_o_spam(texto):
     spam = [
         "cambio de hora", "horario de verano", "horario de invierno", "reloj", "master profesional",
         "lisa institute", "udima", "beca", "matriculate", "curso online", "descuento", "sorteo", "casino",
-        "oferta de empleo", "horoscopo", "loteria", "quiniela", "liga de futbol", "champions league", "apuestas"
+        "oferta de empleo", "horoscopo", "loteria", "quiniela", "liga de futbol", "champions league"
     ]
     return any(s in t for s in spam)
 
@@ -232,65 +185,35 @@ def tiene_vinculo_geopolitico(texto):
     t_raw = str(texto).lower()
     t_norm = normalizar_texto(texto)
 
-    if re.search(r'\b(papa|vaticano|santa sede|obispo|pontifice|francisco|leon xiv)\b', t_norm) and not re.search(r'\b(ciberataque|sabotaje|espionaje|hack|ddos)\b', t_norm):
+    if re.search(r'\b(papa|vaticano|santa sede|obispo|pontifice)\b', t_norm) and not re.search(r'\b(ciberataque|sabotaje|espionaje)\b', t_norm):
         return False
-
     if any(c in t_raw for c in RAICES_CIRILICO + RAICES_CHINO + RAICES_ARABE + RAICES_POLACO):
         return True
-
-    if PATRON_CHINA.search(t_norm) or PATRON_RUSIA_ESTRICTO.search(t_norm):
+    if PATRON_CHINA.search(t_norm) or re.search(r'\b(rusia|ruso|rusa|rusos|moscu|kremlin|putin|ucrania|ucraniano|zelensky|zsu|sbu|gur|fsb|gru|svr|otan|nato)\b', t_norm):
         return True
-
-    if PATRON_PAISES_AJENOS.search(t_norm):
-        if not re.search(r'\b(kremlin|putin|tropas rusas|fuerzas armadas rusas|moscu|espionaje ruso|invasion rusa|shariy|sharij|rybar|zvinchuk|destinus|beijing|xi jinping|mss)\b', t_norm):
-            return False
-
     return False
 
 def tiene_vector_amenaza_global(texto):
     t_norm = normalizar_texto(texto)
-    t_raw = str(texto).lower()
-
-    if any(emp in t_norm for emp in ["destinus", "uav navigation", "oesia", "tecnobit", "indra", "escribano"]):
-        return True
-
-    vectores_cirilico = [
-        "диверс", "шпион", "агент", "хакер", "кибер", "ддос", "ddos", "саботаж", "гибрид",
-        "крипт", "биткоин", "usdt", "бпла", "дron", "дрон", "рэб", "арест", "задержан", "санкц", "кабел", "флот",
-        "казн", "пленн", "военн", "преступлен", "поджог", "теракт", "удар", "взрыв", "зеленск", "фронт",
-        "гражданск", "больниц", "депортац", "гааг", "мкс", "убийств", "ликвидац"
-    ]
-    if any(c in t_raw for c in vectores_cirilico):
-        return True
-
     vectores = [
-        "hibrid", "hybrid", "sabotaj", "sabotage", "saboteador", "espia", "espionaje", "spy", "espionage", "spying",
-        "ciber", "cyber", "hack", "ddos", "malware", "ransomware", "apt28", "apt29", "apt41", "volt typhoon", "sandworm", "noname057", "killnet",
-        "desinformacion", "disinformation", "propaganda", "injerencia", "fimi",
-        "cripto", "crypto", "bitcoin", "btc", "usdt", "tether", "garantex", "sancion", "sanction", "elusion",
-        "flota fantasma", "shadow fleet", "cable submarino", "undersea cable", "petrolero",
-        "crimen de guerra", "war crime", "corte penal internacional", "icc",
-        "genocidio", "tortura", "pow execution", "ejecucion", "masacre", "fosa comun", "bucha", "mariupol",
-        "ataque civil", "ataque a civiles", "hospital", "escuela", "deportacion", "ninos ucranianos",
-        "detenido", "detencion", "arrestado", "arresto", "arrested", "detained", "dron", "uav", "guerra electronica",
-        "jamming", "arson", "incendio provocado", "guerra", "ejercito", "militar", "otan", "nato", "frente", "misil",
-        "ataque", "ofensiva", "bombardeo", "shariy", "sharij", "rybar", "zvinchuk", "destinus", "hornet", "interceptor",
-        "amenaza", "amenazadas", "amenazado", "lista negra", "represalia",
-        "crimen organizado", "mafia", "narcotrafico", "sicario", "asesinato", "homicidio", "muerte", "envenenamiento", "defenestrado",
-        "atentado", "terrorismo", "terrorista", "no convencional", "paquete incendiario", "servicios de inteligencia", "fsb", "gru", "mss"
+        "hibrid", "sabotaj", "sabotaż", "espionaje", "espia", "ciber", "hack", "ddos", "ransomware", "apt28", "apt29", "apt41", "volt typhoon",
+        "desinformacion", "fimi", "cripto", "bitcoin", "usdt", "garantex", "sancion", "sanciones", "elusion", "flota fantasma", "shadow fleet",
+        "crimen de guerra", "genocidio", "masacre", "ataque a civiles", "detenido", "arrestado", "detencion", "dron", "uav", "guerra",
+        "misil", "amenaza", "crimen organizado", "asesinato", "sicario", "terrorismo", "terrorista", "atentado", "fsb", "gru", "mss"
     ]
     return any(v in t_norm for v in vectores)
 
 # ==========================================
-# TRADUCTOR RÁPIDO CON TIMEOUT
+# MOTOR DE TRADUCCIÓN ROBUSTO (MULTICLIENTE Y ANTI-BLOQUEO)
 # ==========================================
 def traducir_texto_rapido(texto_orig):
     if not texto_orig: return ""
     t_clean = limpiar_html_texto(texto_orig)
     if len(t_clean) < 4: return t_clean
 
-    with CACHE_LOCK:
-        if t_clean in CACHE_TITULARES_GLOBAL: return CACHE_TITULARES_GLOBAL[t_clean]
+    cache = st.session_state.cache_traducciones
+    if t_clean in cache:
+        return cache[t_clean]
 
     medio_suffix = ""
     texto_a_traducir = t_clean
@@ -299,59 +222,41 @@ def traducir_texto_rapido(texto_orig):
         medio_suffix = m_medio.group(1)
         texto_a_traducir = t_clean[:m_medio.start()].strip()
 
-    try:
-        url = "https://translate.googleapis.com/translate_a/single"
-        params = {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:350]}
-        r = SESION_HTTP.get(url, params=params, timeout=1.8)
-        if r.status_code == 200:
-            data = r.json()
-            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
-                partes = [seg[0] for seg in data[0] if isinstance(seg, list) and len(seg) > 0 and seg[0]]
-                trad = limpiar_html_texto("".join(partes))
-                if len(trad) > 3:
-                    res = f"{trad}{medio_suffix}" if medio_suffix else trad
-                    with CACHE_LOCK:
-                        CACHE_TITULARES_GLOBAL[t_clean] = res
-                    return res
-    except Exception:
-        pass
+    endpoints = [
+        {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:350]},
+        {"client": "dict-chrome-ex", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:350]}
+    ]
 
-    with CACHE_LOCK:
-        CACHE_TITULARES_GLOBAL[t_clean] = t_clean
+    for params in endpoints:
+        try:
+            r = SESION_HTTP.get("https://translate.googleapis.com/translate_a/single", params=params, timeout=2.2)
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
+                    partes = [seg[0] for seg in data[0] if isinstance(seg, list) and len(seg) > 0 and seg[0]]
+                    trad = limpiar_html_texto("".join(partes))
+                    if len(trad) > 3:
+                        res = f"{trad}{medio_suffix}" if medio_suffix else trad
+                        cache[t_clean] = res
+                        return res
+        except Exception:
+            continue
+
     return t_clean
 
 def traducir_lote(lista_textos):
-    with ThreadPoolExecutor(max_workers=20) as ex:
+    with ThreadPoolExecutor(max_workers=15) as ex:
         return list(ex.map(traducir_texto_rapido, lista_textos))
 
 # ==========================================
-# CLASIFICACIÓN TEMÁTICA Y NER LIGERA
+# CLASIFICACIÓN TEMÁTICA Y NER
 # ==========================================
 def extraer_entidades_clave(texto_completo):
     t_norm = normalizar_texto(texto_completo)
     etiquetas = []
-    actores = {
-        "GRU": r'\bgru\b', "FSB": r'\bfsb\b', "SVR": r'\bsvr\b',
-        "APT41": r'\bapt41\b', "Volt Typhoon": r'\bvolt typhoon\b',
-        "Mustang Panda": r'\bmustang panda\b', "Salt Typhoon": r'\bsalt typhoon\b',
-        "NoName057": r'\bnoname057\b', "Sandworm": r'\bsandworm\b',
-        "APT28 (Fancy Bear)": r'\b(apt28|fancy bear)\b', "APT29 (Cozy Bear)": r'\b(apt29|cozy bear)\b',
-        "Killnet": r'\bkillnet\b', "Wagner": r'\bwagner\b', "MSS (China)": r'\bmss\b|ministerio de seguridad del estado',
-        "SBU": r'\bsbu\b', "GUR": r'\bgur\b'
-    }
-    vectores = {
-        "Sabotaje": r'\b(sabotaj|cable submarino|red ferroviaria|incendio provocado|arson)\b',
-        "Ciberataque": r'\b(ciberataque|ransomware|ddos|malware|infiltracion cibernetica)\b',
-        "Desinformación": r'\b(desinformacion|fimi|propaganda|fake news|red de bots)\b',
-        "Flota Fantasma": r'\b(flota fantasma|shadow fleet|petrolero clandestino)\b',
-        "Doble Uso / Sanciones": r'\b(elusion|evasion de sanciones|doble uso|chips militares|triangulacion)\b',
-        "Sicariato / Muerte": r'\b(sicario|asesinato selectivo|homicidio|envenenamiento|defenestrado)\b',
-        "Terrorismo": r'\b(terrorismo|atentado|paquete incendiario|explosivo)\b'
-    }
-    empresas = {
-        "Destinus": r'\bdestinus\b', "Indra": r'\bindra\b', "Oesía / Tecnobit": r'\b(oesia|tecnobit)\b',
-        "Navantia": r'\bnavantia\b', "Escribano": r'\bescribano\b', "GDELS / Santa Bárbara": r'\b(gdels|santa barbara)\b'
-    }
+    actores = {"GRU": r'\bgru\b', "FSB": r'\bfsb\b', "APT41": r'\bapt41\b', "Volt Typhoon": r'\bvolt typhoon\b', "NoName057": r'\bnoname057\b', "Sandworm": r'\bsandworm\b'}
+    vectores = {"Sabotaje": r'\b(sabotaj|sabotaż|cable submarino|arson)\b', "Ciberataque": r'\b(ciber|ransomware|ddos|malware)\b', "Desinformación": r'\b(desinformacion|fimi)\b', "Sanciones/Flota": r'\b(sanciones|elusion|flota fantasma)\b', "Terror/Sicariato": r'\b(sicario|terrorismo|atentado)\b'}
+    empresas = {"Destinus": r'\bdestinus\b', "Indra": r'\bindra\b', "Navantia": r'\bnavantia\b', "Escribano": r'\bescribano\b'}
 
     for n, p in actores.items():
         if re.search(p, t_norm): etiquetas.append((n, "#2563eb"))
@@ -364,47 +269,31 @@ def extraer_entidades_clave(texto_completo):
 def categorizar_noticia(titular, cuerpo, plat, canal):
     if plat == "REDES": return "REDES"
     if plat == "TELEGRAM": return "TELEGRAM"
-    t_all = normalizar_texto(desparasitar_nombres_medios(f"{titular} {cuerpo}"))
-    
-    # Empresa estratégica
-    if any(re.search(r'\b' + re.escape(emp) + r'\b', t_all) for emp in EMPRESAS_ESTRATEGICAS_ESP):
-        return "EMPRESA"
-        
-    if re.search(r'\b(detenido|detenida|detenidos|detencion|detenciones|arrestado|arrestada|arrestados|arresto|arrested|detained|festnahme|zatrzymany)\b', t_all):
-        return "DETENCION"
-        
-    if re.search(r'\b(cripto|criptomoneda|crypto|bitcoin|btc|usdt|tether|garantex|blockchain)\b', t_all):
-        return "CRIPTO"
-        
-    if re.search(r'\b(sancion|sanciones|sanctions?|elusion|eludir|evasion de sanciones|flota fantasma|shadow fleet|petrolero ruso|petroleros fantasma|tope al crudo|price cap|ofac)\b', t_all):
-        return "SANCIONES"
-        
-    if re.search(r'\b(espana|espanol|espanola|espanoles|spain|madrid|barcelona|cartagena|rota|torrejon|cni|incibe|ccn-cert|audiencia nacional|guardia civil|policia nacional|gobierno de espana|ministerio de defensa|margarita robles|armada espanola|seguridad nacional)\b', t_all):
-        return "ESPANA"
-        
-    if PATRON_CHINA.search(t_all) or any(c in str(f"{titular} {cuerpo}").lower() for c in RAICES_CHINO):
-        return "CHINA"
-        
-    if re.search(r'\b(crimen de guerra|war crimes?|corte penal internacional|cpi|icc|la haya|genocidio|tortura|masacre|bucha|mariupol|ataque a civiles|hospital infantil|terrorismo|terrorista|atentado|paquete incendiario|asesinato selectivo)\b', t_all):
-        return "CRIMENES"
-        
+    t_all = normalizar_texto(f"{titular} {cuerpo}")
+    if any(emp in t_all for emp in EMPRESAS_ESTRATEGICAS_ESP): return "EMPRESA"
+    if re.search(r'\b(detenido|detenida|detenidos|detencion|arrestado|arresto|zatrzymany)\b', t_all): return "DETENCION"
+    if re.search(r'\b(cripto|bitcoin|usdt|tether|garantex)\b', t_all): return "CRIPTO"
+    if re.search(r'\b(sancion|sanciones|elusion|flota fantasma|shadow fleet|price cap|ofac)\b', t_all): return "SANCIONES"
+    if re.search(r'\b(espana|espanol|espanola|madrid|cni|guardia civil|policia nacional|margarita robles)\b', t_all): return "ESPANA"
+    if PATRON_CHINA.search(t_all) or any(c in str(f"{titular} {cuerpo}").lower() for c in RAICES_CHINO): return "CHINA"
+    if re.search(r'\b(crimen de guerra|cpi|terrorismo|atentado|sicario|asesinato selectivo)\b', t_all): return "CRIMENES"
     return "GLOBAL"
 
 def generar_analisis_contexto(categoria, canal=""):
     c = canal.lower()
-    if "rybar" in c or "zvinchuk" in c: return "Análisis táctico y propaganda militar de Mijaíl Zvinchuk (@rybar), exoficial del Ministerio de Defensa ruso."
-    if "sharij" in c: return "Contenido de Anatolii Sharij: seguimiento crítico y difusión en redes del frente ucraniano-ruso."
-    if c.replace("@","") in CANALES_DESINFORMACION_ESP: return "Canal clasificado en la red de propaganda, desinformación e injerencia extranjera (FIMI) vinculada al ecosistema pro-Kremlin."
-    if categoria == "SANCIONES": return "Vigilancia de elusión de sanciones: movimientos de la flota fantasma, redes de contrabando de doble uso o triangulación logística."
-    if categoria == "CHINA": return "Actividad estratégica de la República Popular China: ciberespionaje (Volt Typhoon, APT41), injerencia en Occidente y alineación con Moscú."
-    if categoria == "EMPRESA": return "Seguimiento corporativo: empresas estratégicas españolas frente a amenazas híbridas, ciberataques o contratos de defensa."
-    if categoria == "CRIMENES": return "Documentación de crímenes de guerra, terrorismo no convencional, ataques a civiles y homicidios orquestados por servicios extranjeros."
-    if categoria == "DETENCION": return "Operaciones policiales y contrainteligencia: neutralización y arresto de espías, saboteadores o redes de inteligencia extranjera."
-    if categoria == "ESPANA": return "Impacto directo en la seguridad nacional e infraestructuras críticas de España frente a operaciones hostiles."
-    if categoria == "CRIPTO": return "Inteligencia financiera (FININT): evasión de sanciones internacionales y uso de criptoactivos (USDT, BTC)."
-    return "Actividad vinculada a operaciones híbridas globales, crimen organizado y servicios de inteligencia."
+    if "rybar" in c or "zvinchuk" in c: return "Análisis táctico y propaganda militar rusa."
+    if "sharij" in c: return "Contenido de Anatolii Sharij (frente ucraniano-ruso)."
+    if c.replace("@","") in CANALES_DESINFORMACION_ESP: return "Canal asociado a redes de desinformación/FIMI pro-Kremlin."
+    if categoria == "SANCIONES": return "Vigilancia de elusión de sanciones y flota fantasma."
+    if categoria == "CHINA": return "Actividad estratégica de China (Ciberespionaje/Injerencia)."
+    if categoria == "EMPRESA": return "Seguimiento corporativo: empresas estratégicas frente a amenazas híbridas."
+    if categoria == "CRIMENES": return "Documentación de crímenes de guerra, sicariato o terrorismo."
+    if categoria == "DETENCION": return "Operaciones policiales y contraespionaje."
+    if categoria == "ESPANA": return "Impacto directo en la seguridad nacional de España."
+    if categoria == "CRIPTO": return "Inteligencia financiera (FININT) y criptoactivos."
+    return "Actividad vinculada a operaciones híbridas y conflicto global."
     # ==========================================
-# RASTREADORES PARALELOS CON FILTRO ESTRICTO
+# RASTREADORES PARALELOS
 # ==========================================
 def raspar_youtube_canal(canal_id, etiqueta):
     items = []
@@ -417,7 +306,7 @@ def raspar_youtube_canal(canal_id, etiqueta):
                 link = entry.find("{http://www.w3.org/2005/Atom}link").get("href", "")
                 pub = entry.findtext("{http://www.w3.org/2005/Atom}published", "")
                 desc = limpiar_html_texto(entry.findtext(".//{http://search.yahoo.com/mrss/}description", ""))
-                
+
                 texto_eval = f"{tit} {desc}"
                 if not tiene_vinculo_geopolitico(texto_eval) or not tiene_vector_amenaza_global(texto_eval):
                     continue
@@ -438,7 +327,7 @@ def raspar_un_canal_tg(canal):
         r = SESION_HTTP.get(f"https://t.me/s/{canal}", timeout=2.5)
         if r.status_code != 200: return []
         soup = BeautifulSoup(r.text, "html.parser")
-        
+
         for p in soup.find_all("div", class_="tgme_widget_message_wrap")[-35:]:
             time_tag = p.find("time")
             try: dt_obj = datetime.fromisoformat(time_tag.get("datetime").replace("Z", "+00:00")).astimezone(timezone.utc) if time_tag else datetime.now(timezone.utc)
@@ -524,7 +413,7 @@ def raspar_externos(url, etiqueta, limite=25):
                 desc = limpiar_html_texto(item.findtext("description", ""))
                 link = item.findtext("link", "")
                 pub = item.findtext("pubDate", "")
-                
+
                 texto_eval = f"{tit} {desc}"
                 if not tiene_vinculo_geopolitico(texto_eval) or not tiene_vector_amenaza_global(texto_eval):
                     continue
@@ -591,7 +480,7 @@ def ejecutar_actualizacion_total():
         f_tg = [ex.submit(raspar_un_canal_tg, c) for c in canales_tg]
         f_rss = [ex.submit(procesar_un_feed_rss, f) for f in fuentes_rss]
         f_ext = [ex.submit(raspar_externos, "https://www.rumafia.net/en/rss/", "RuMafia"), ex.submit(raspar_externos, "https://antikor.com.ua/articles.rss", "Antikor")]
-        
+
         for f in as_completed(f_yt + f_tg + f_rss + f_ext):
             try: todos_brutos.extend(f.result())
             except: pass
@@ -600,7 +489,7 @@ def ejecutar_actualizacion_total():
     for ant in anteriores:
         todos_brutos.append({
             "id": ant["id"], "plataforma": ant["plataforma"], "canal": ant["canal"], "fecha_dt": ant["fecha_dt"],
-            "titular_raw": ant.get("titular_original", ant["titular"]), "cuerpo_raw": ant["hecho_reportado"],
+            "titular_raw": ant.get("titular_original", ant["titular"]), "cuerpo_raw": ant.get("cuerpo_original", ant["hecho_reportado"]),
             "multimedia": ant.get("multimedia"), "tiene_video": ant.get("tiene_video", False), "enlace": ant["enlace"],
             "canales_correlacionados": ant.get("canales_correlacionados", [ant["canal"]]),
             "fuentes_coincidentes": ant.get("fuentes_coincidentes", [])
@@ -633,15 +522,18 @@ def ejecutar_actualizacion_total():
         return
 
     titulares_crudos = [item["titular_raw"] for item in pre_unicos]
+    cuerpos_crudos = [item["cuerpo_raw"] for item in pre_unicos]
+
     titulares_traducidos = traducir_lote(titulares_crudos)
+    cuerpos_traducidos = traducir_lote(cuerpos_crudos)
 
     alertas_finales = []
-    for item, tit_trad in zip(pre_unicos, titulares_traducidos):
-        cuerpo_intacto = item["cuerpo_raw"]
+    for item, tit_trad, cuerpo_trad in zip(pre_unicos, titulares_traducidos, cuerpos_traducidos):
         plat = item["plataforma"]
         tit_raw = item["titular_raw"]
+        cuerpo_raw = item["cuerpo_raw"]
 
-        cat_final = categorizar_noticia(tit_trad, cuerpo_intacto, plat, item["canal"])
+        cat_final = categorizar_noticia(tit_trad, cuerpo_trad, plat, item["canal"])
 
         alertas_finales.append({
             "id": item["id"], "plataforma": plat, "canal": item["canal"],
@@ -649,9 +541,13 @@ def ejecutar_actualizacion_total():
             "fuentes_coincidentes": item.get("fuentes_coincidentes", []), "fecha_dt": item["fecha_dt"],
             "titular_traducido": f"[{item['canal'].replace('@','').upper()}] {tit_trad}" if plat == "TELEGRAM" else tit_trad,
             "titular_original": f"[{item['canal'].replace('@','').upper()}] {tit_raw}" if plat == "TELEGRAM" else tit_raw,
-            "titular": tit_trad, "categoria": cat_final,
-            "etiquetas_ner": extraer_entidades_clave(f"{tit_trad} {cuerpo_intacto}"),
-            "hecho_reportado": cuerpo_intacto, "evaluacion_contexto": generar_analisis_contexto(cat_final, canal=item["canal"]),
+            "cuerpo_traducido": cuerpo_trad,
+            "cuerpo_original": cuerpo_raw,
+            "titular": tit_trad,
+            "hecho_reportado": cuerpo_trad,
+            "categoria": cat_final,
+            "etiquetas_ner": extraer_entidades_clave(f"{tit_trad} {cuerpo_trad}"),
+            "evaluacion_contexto": generar_analisis_contexto(cat_final, canal=item["canal"]),
             "multimedia": item.get("multimedia"), "tiene_video": item.get("tiene_video", False), "enlace": item["enlace"]
         })
 
@@ -695,17 +591,19 @@ def generar_html_ejecutivo(alertas, ventana_str="GENERAL"):
     return html
 
 # ==========================================
-# MOTOR BOOLEANO
+# MOTOR BOOLEANO BILINGÜE
 # ==========================================
-def cumple_busqueda_booleana(texto_evaluar, query_str):
+def cumple_busqueda_booleana_bilingue(item, query_str):
     if not query_str or not query_str.strip(): return True
-    t_norm = normalizar_texto(texto_evaluar)
+    # Búsqueda simultánea sobre el texto original y sobre el texto traducido al castellano
+    corpus = f"{item.get('titular_traducido','')} {item.get('cuerpo_traducido','')} {item.get('titular_original','')} {item.get('cuerpo_original','')}"
+    t_norm = normalizar_texto(corpus)
     q_raw = query_str.strip()
 
     if re.search(r'\b(AND|OR|NOT)\b', q_raw) or "-" in q_raw:
         for term_not in re.findall(r'(?:NOT\s+|-)(\w+)', q_raw, flags=re.IGNORECASE):
             if normalizar_texto(term_not) in t_norm: return False
-        
+
         q_clean = re.sub(r'(?:NOT\s+|-)\w+', '', q_raw, flags=re.IGNORECASE).strip()
         if not q_clean: return True
 
@@ -770,7 +668,7 @@ alertas_totales = st.session_state.get("alertas_monitor", [])
 with st.container():
     c_flt1, c_flt2, c_flt3, c_flt4 = st.columns([1.5, 1.2, 1.3, 1.0])
     with c_flt1:
-        busqueda_txt = st.text_input("🔍 Búsqueda Booleana:", placeholder="Ej: sabotaje -incendio")
+        busqueda_txt = st.text_input("🔍 Búsqueda Booleana (multilingüe):", placeholder="Ej: sabotaje -incendio")
     with c_flt2:
         rango_tiempo = st.selectbox("📅 Ventana Temporal:", ["Últimas 24 Horas", "Últimas 48 Horas", "Última Semana", "Histórico Completo"], index=2)
     with c_flt3:
@@ -784,7 +682,7 @@ elif rango_tiempo == "Últimas 48 Horas": datos_filtrados = [x for x in alertas_
 elif rango_tiempo == "Última Semana": datos_filtrados = [x for x in alertas_totales if cumple_ventana_temporal(x["fecha_dt"], 168)]
 else: datos_filtrados = alertas_totales
 
-if busqueda_txt: datos_filtrados = [x for x in datos_filtrados if cumple_busqueda_booleana(f"{x['titular']} {x['hecho_reportado']}", busqueda_txt)]
+if busqueda_txt: datos_filtrados = [x for x in datos_filtrados if cumple_busqueda_booleana_bilingue(x, busqueda_txt)]
 if canales_sel: datos_filtrados = [x for x in datos_filtrados if x["canal"] in canales_sel]
 
 # Barra de Botones Operativos
@@ -843,9 +741,12 @@ def renderizar_tarjetas(lista_items):
         enlace_seguro = html_module.escape(enlace_raw) if es_url_segura(enlace_raw) else "#"
 
         titular_mostrar = item["titular_traducido"] if auto_traducir else item["titular_original"]
+        cuerpo_mostrar = item["cuerpo_traducido"] if auto_traducir else item["cuerpo_original"]
         item["titular"] = titular_mostrar
+        item["hecho_reportado"] = cuerpo_mostrar
 
-        texto_copia = f"🚨 ALERTA OSINT | {cat}\nTitular: {titular_mostrar}\nFuente: {item['canal']} | Fecha: {obtener_fecha_madrid_str(item['fecha_dt'])} (Madrid)\nEnlace: {enlace_raw}"
+        # ALERTA DE COPIA SIEMPRE TRADUCIDA AL ESPAÑOL
+        texto_copia = f"🚨 ALERTA OSINT | {cat}\nTitular: {item['titular_traducido']}\nReporte: {item['cuerpo_traducido'][:250]}...\nFuente: {item['canal']} | Fecha: {obtener_fecha_madrid_str(item['fecha_dt'])} (Madrid)\nEnlace: {enlace_raw}"
 
         html_card = f"""
         <div class="osint-card" style="border-left: 8px solid {b_color};">
@@ -856,16 +757,16 @@ def renderizar_tarjetas(lista_items):
             <a href="{enlace_seguro}" target="_blank" rel="noopener noreferrer" class="btn-source">🔗 ABRIR FUENTE ORIGINAL</a>
         </div>
         """
-        
+
         c_chk, c_card = st.columns([0.05, 0.95])
         with c_chk:
             st.checkbox("PDF", key=f"sel_{item['id']}", label_visibility="collapsed")
-            
+
         with c_card:
             st.markdown(html_card, unsafe_allow_html=True)
             with st.expander("📋 Formato de Alerta (Copiar)"):
                 st.code(texto_copia, language="markdown")
-            
+
             if item.get("fuentes_coincidentes"):
                 with st.expander(f"📑 Coberturas coincidentes ({len(item['fuentes_coincidentes'])})"):
                     for f_sec in item["fuentes_coincidentes"]:
