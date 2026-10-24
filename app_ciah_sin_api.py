@@ -10,7 +10,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Blindaje visual CSS: oculta elementos de despliegue sin romper el menú móvil
+# Blindaje visual CSS
 st.markdown("""
 <style>
     #MainMenu, footer { visibility: hidden !important; display: none !important; height: 0px !important; }
@@ -58,6 +58,7 @@ if not gestionar_acceso():
 # ==========================================
 # 2. CLIENTE HTTP Y CACHÉ PERSISTENTE
 # ==========================================
+import streamlit.components.v1 as components
 import requests
 from requests.adapters import HTTPAdapter
 import xml.etree.ElementTree as ET
@@ -291,9 +292,9 @@ def traducir_texto(texto_orig):
         medio_suffix = m_medio.group(1)
         texto_a_traducir = t_clean[:m_medio.start()].strip()
 
-    params = {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:450]}
+    params = {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:500]}
     try:
-        r = SESION_HTTP.get("https://translate.googleapis.com/translate_a/single", params=params, timeout=2.2)
+        r = SESION_HTTP.get("https://translate.googleapis.com/translate_a/single", params=params, timeout=2.5)
         if r.status_code == 200:
             data = r.json()
             if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
@@ -418,7 +419,7 @@ def raspar_canal_tg(canal):
             foto_url = None
             tiene_video = False
 
-            # Extracción completa de fotos de Telegram
+            # Extracción de fotos de Telegram
             for tag_foto in p.find_all("a", class_="tgme_widget_message_photo_wrap"):
                 m = re.search(r"url\(['\"]?(https?://[^'\")]+)['\"]?\)", tag_foto.get("style", ""))
                 if m:
@@ -571,6 +572,9 @@ def cargar_todas_las_fuentes():
         b.setdefault("fuentes_coincidentes", [])
         unicos.append(b)
 
+    # Ordenación cronológica estricta: de más reciente a más antigua
+    unicos.sort(key=lambda x: x["fecha_dt"] if x["fecha_dt"] else datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+
     return unicos
 
 # ==========================================
@@ -590,13 +594,42 @@ if "alertas_base" not in st.session_state:
         st.session_state.ultima_actualizacion = obtener_fecha_madrid_str()
         st.session_state.seleccionadas_pdf = {a["id"] for a in unicos}
 
-st.markdown("""
-<div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); border-left: 8px solid #dc2626; border-radius: 10px; padding: 16px 22px; margin-bottom: 14px;">
-    <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 900; letter-spacing: 0.5px;">BUSCADOR DE AMENAZAS HÍBRIDAS</h1>
-    <p style="color: #94a3b8; font-size: 13px; margin: 4px 0 0 0;">SISTEMA DE VIGILANCIA DE FUENTES ABIERTAS // OSINT</p>
-</div>
-""", unsafe_allow_html=True)
+# Cabecera Táctica con Logo Hexagonal HD y Widget de Traducción de Google
+logo_svg = """<svg width="65" height="65" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <circle cx="50" cy="50" r="47" fill="#1e293b" stroke="#334155" stroke-width="2" />
+    <circle cx="50" cy="50" r="40" stroke="#38bdf8" stroke-width="1.2" stroke-dasharray="3 3" opacity="0.6" />
+    <path d="M50 14 L75 25 V52 C75 69 50 84 50 84 C50 84 25 69 25 52 V25 Z" fill="#0f172a" stroke="#38bdf8" stroke-width="2.5" />
+    <polygon points="53,24 37,48 48,48 43,72 61,44 51,44" fill="#ef4444" />
+</svg>"""
 
+col_head1, col_head2 = st.columns([0.75, 0.25])
+with col_head1:
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); border-left: 8px solid #dc2626; border-radius: 10px; padding: 14px 20px; display: flex; align-items: center; gap: 18px;">
+        <div>{logo_svg}</div>
+        <div>
+            <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 900; letter-spacing: 0.5px;">BUSCADOR DE AMENAZAS HÍBRIDAS</h1>
+            <p style="color: #94a3b8; font-size: 13px; margin: 4px 0 0 0;">SISTEMA DE VIGILANCIA DE FUENTES ABIERTAS // OSINT</p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+with col_head2:
+    # Widget web de Google Translate integrado arriba a la derecha (equivalente al botón derecho)
+    components.html("""
+    <div style="text-align: right; padding-top: 10px;">
+        <span style="font-size: 12px; color: #cbd5e1; font-family: sans-serif; font-weight: bold;">Traducir página: </span>
+        <div id="google_translate_element" style="display: inline-block;"></div>
+    </div>
+    <script type="text/javascript">
+    function googleTranslateElementInit() {
+      new google.translate.TranslateElement({pageLanguage: 'auto', includedLanguages: 'es', layout: google.translate.TranslateElement.InlineLayout.SIMPLE}, 'google_translate_element');
+    }
+    </script>
+    <script type="text/javascript" src="//translate.google.com/translate.a/element.js?cb=googleTranslateElementInit"></script>
+    """, height=50)
+
+# Panel de Filtros
 with st.container():
     c_flt1, c_flt2, c_flt3 = st.columns([1.8, 1.2, 1.2])
     with c_flt1:
@@ -621,7 +654,10 @@ if busqueda_txt:
 if canales_sel:
     alertas_visibles = [x for x in alertas_visibles if x["canal"] in canales_sel]
 
-# Barra de herramientas
+# Asegurar orden cronológico de más recientes a más antiguas
+alertas_visibles.sort(key=lambda x: x["fecha_dt"] if x["fecha_dt"] else datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+
+# Barra de herramientas y exportación
 c_btn1, c_btn2, c_btn3, c_btn4 = st.columns([1.1, 1.2, 1.2, 1.5])
 with c_btn1:
     if st.button("🔄 ACTUALIZAR", type="primary", use_container_width=True):
@@ -688,7 +724,10 @@ def renderizar_tarjetas(lista_items):
         st.info("No se registran alertas que cumplan los filtros.")
         return
 
-    for item in lista_items:
+    # Orden cronológico estricto garantizado dentro de la pestaña
+    items_ordenados = sorted(lista_items, key=lambda x: x["fecha_dt"] if x["fecha_dt"] else datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+
+    for item in items_ordenados:
         cat = item.get("categoria", "GLOBAL")
         b_color = {
             "ESPANA": "#dc2626", "EMPRESA": "#d97706", "GLOBAL": "#0f172a",
@@ -713,7 +752,7 @@ def renderizar_tarjetas(lista_items):
         if cat in ["TELEGRAM", "REDES"]:
             bloque_reporte = f'<div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 14px; color: #1e293b; font-size: 13.5px; line-height: 1.55; text-align: justify; margin-bottom: 8px;"><strong>📄 Reporte / Post:</strong><br>{html_module.escape(cuerpo_mostrar)}</div>'
 
-        # Tarjeta HTML en bloque compacto sin espacios al inicio de línea
+        # HTML plano sin sangrías al inicio de línea para evitar que Streamlit lo confunda con código
         html_card = (
             f'<div style="background:#ffffff; border:1px solid #cbd5e1; border-left:7px solid {b_color}; border-radius:8px; padding:14px 18px; margin-bottom:8px;">'
             f'<div style="display: flex; flex-wrap: wrap; align-items: flex-start;">'
@@ -737,7 +776,7 @@ def renderizar_tarjetas(lista_items):
         with col_content:
             st.markdown(html_card, unsafe_allow_html=True)
             
-            # Botón de traducción individual
+            # Botón de traducción bajo demanda
             c_tr, c_cp = st.columns([0.22, 0.78])
             with c_tr:
                 if not esta_traducido:
@@ -750,7 +789,7 @@ def renderizar_tarjetas(lista_items):
                 else:
                     st.caption("✅ Traducida al español")
 
-            # Formato de copia
+            # Formato de copia de la alerta
             with st.expander("📋 Formato de alerta para copiar"):
                 texto_copia = f"🚨 ALERTA OSINT | {cat}\nTitular: {titular_mostrar}\nReporte: {cuerpo_mostrar[:300]}...\nFuente: {item['canal']} | Fecha: {fecha_str}\nEnlace: {item.get('enlace','')}"
                 st.code(texto_copia, language="markdown")
