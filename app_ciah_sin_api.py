@@ -10,6 +10,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Blindaje visual CSS
 st.markdown("""
 <style>
     #MainMenu, footer { visibility: hidden !important; display: none !important; height: 0px !important; }
@@ -55,8 +56,9 @@ if not gestionar_acceso():
     st.stop()
 
 # ==========================================
-# 2. CLIENTE HTTP
+# 2. CLIENTE HTTP Y CACHÉ PERSISTENTE
 # ==========================================
+import streamlit.components.v1 as components
 import requests
 from requests.adapters import HTTPAdapter
 import xml.etree.ElementTree as ET
@@ -69,6 +71,7 @@ import hashlib
 from email.utils import parsedate_to_datetime
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 from difflib import SequenceMatcher
 from urllib.parse import urlparse, urlunparse
 import pandas as pd
@@ -94,10 +97,15 @@ def get_sesion_http():
     })
     return sesion
 
+@st.cache_resource
+def get_traducciones_cache():
+    return {}, threading.Lock()
+
 SESION_HTTP = get_sesion_http()
+CACHE_TRADUCCIONES, CACHE_LOCK = get_traducciones_cache()
 
 # ==========================================
-# 3. REGEX GLOBALES MULTILINGÜES
+# 3. MATRICES Y REGEX OPERATIVAS
 # ==========================================
 CANALES_DESINFORMACION_ESP = {
     "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu", "ASupersharij"
@@ -110,7 +118,6 @@ EMPRESAS_ESTRATEGICAS_ESP = [
     "telefonica", "iberdrola", "repsol", "naturgy", "redeia", "red electrica", "enagas", "talgo"
 ]
 
-# Actores en español, inglés, ruso, polaco y chino
 PATRON_ACTORES = re.compile(
     r'\b('
     r'rusia|ruso|rusa|rusos|rusas|moscu|kremlin|putin|'
@@ -127,7 +134,6 @@ PATRON_ACTORES = re.compile(
     r')\b', re.IGNORECASE
 )
 
-# Vectores de amenazas híbridas en múltiples idiomas
 PATRON_VECTORES = re.compile(
     r'\b('
     r'hibrid\w*|hybrid\w*|sabotaj\w*|sabotage\w*|saboteador\w*|espia\w*|espionaje|spy\w*|espionage|spying|'
@@ -198,19 +204,17 @@ def es_relevante(texto, canal):
     if not texto: return False
     canal_l = canal.lower()
     
-    # Canales tácticos e inteligencia militar preclasificados
     if any(k in canal_l for k in ["sbu", "gur", "rybar", "sharij", "informnapalm", "bellingcat", "insider", "occrp", "euvsdisinfo", "generalstaff"]):
         return True
 
     t_norm = normalizar_texto(texto)
     t_raw = str(texto)
 
-    # Exclusiones de contenido genérico ajeno a amenazas híbridas
+    # Excluir temas no relacionados
     if re.search(r'\b(marruecos|ceuta|melilla|pateras|inmigracion irregular|vaticano|santa sede|papa francisco|liga de futbol|champions|supermercado|receta)\b', t_norm):
         if not re.search(r'\b(rusia|ruso|kremlin|china|ciberataque|sabotaje|espionaje|fimi|pegasus)\b', t_norm):
             return False
 
-    # Fuentes en lenguas nativas
     if PATRON_CIRILICO.search(t_raw) or PATRON_CHINO.search(t_raw) or PATRON_ARABE.search(t_raw):
         return True
 
@@ -325,7 +329,7 @@ def procesar_feed_rss(url, etiqueta):
             entradas = root.findall(".//{http://www.w3.org/2005/Atom}entry")
             es_atom = True
 
-        for item in entradas[:35]:
+        for item in entradas[:40]:
             if es_atom:
                 tit = limpiar_html_texto(item.findtext("{http://www.w3.org/2005/Atom}title", ""))
                 desc = limpiar_html_texto(item.findtext("{http://www.w3.org/2005/Atom}summary", "") or item.findtext("{http://www.w3.org/2005/Atom}content", ""))
@@ -366,7 +370,7 @@ def raspar_canal_tg(canal):
         if r.status_code != 200:
             return []
         soup = BeautifulSoup(r.text, "html.parser")
-        for p in soup.find_all("div", class_="tgme_widget_message_wrap")[-40:]:
+        for p in soup.find_all("div", class_="tgme_widget_message_wrap")[-45:]:
             time_tag = p.find("time")
             dt = None
             if time_tag and time_tag.get("datetime"):
@@ -385,7 +389,6 @@ def raspar_canal_tg(canal):
             foto_url = None
             tiene_video = False
 
-            # Extracción de fotos de Telegram
             for tag_foto in p.find_all("a", class_="tgme_widget_message_photo_wrap"):
                 m = re.search(r"url\(['\"]?(https?://[^'\")]+)['\"]?\)", tag_foto.get("style", ""))
                 if m:
@@ -442,18 +445,15 @@ def raspar_youtube(canal_id, etiqueta):
     return items
 
 # ==========================================
-# 8. BANCO COMPLETO DE FUENTES OSINT GLOBALES
+# 8. BANCO COMPLETO DE FUENTES OSINT
 # ==========================================
 @st.cache_data(ttl=600, show_spinner=False)
 def cargar_todas_las_fuentes():
     canales_tg = [
-        # Ucrania oficiales y tácticos
         "GeneralStaffZSU", "kpszsu", "SBUkr", "DIUkraine", "operativnoZSU",
         "CenterCounteringDisinformation", "mvs_ua", "dsns_telegram", "suspilnenews", "ukrainenowenglish",
         "pravda_com_ua", "kyivindependent_official", "informnapalm", "cyberresistanceua",
-        # Medios rusos independientes y exilio
         "meduzalive", "astrapress", "istories_media", "vchkogpu", "mediazzzona", "bbcrussian", "novayagazeta_europe", "theinsider",
-        # Canales militares y propaganda
         "rybar", "dva_majors", "ASupersharij", "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu"
     ]
 
@@ -466,49 +466,39 @@ def cargar_todas_las_fuentes():
         ("UC7_2eFfP_n5v3H_Z_L-v_4w", "YouTube: Bellingcat OSINT")
     ]
 
-    # Cobertura global multilingüe (Español, Inglés, Ruso, Ucraniano, Polaco, Chino y Árabe)
     fuentes_rss = [
-        # Institucional España y UE
         ("https://news.google.com/rss/search?q=(DSN+OR+\"Seguridad+Nacional\")+(sabotaje+OR+ciberataque+OR+espionaje+OR+híbridas)&hl=es&gl=ES&ceid=ES:es", "DSN Amenazas (ES)"),
         ("https://news.google.com/rss/search?q=(\"Consilium\"+OR+\"Council+of+the+EU\")+(hybrid+OR+sabotage+OR+sanctions)&hl=en-US&gl=US&ceid=US:en", "Consilium UE (EN)"),
         ("https://news.google.com/rss/search?q=(\"NATO+StratCom\"+OR+\"StratCom+COE\")+disinformation&hl=en-US&gl=US&ceid=US:en", "NATO StratCom (EN)"),
         ("https://news.google.com/rss/search?q=Europol+(hybrid+OR+sabotage+OR+\"organized+crime\")+Russia&hl=en-US&gl=US&ceid=US:en", "Europol (EN)"),
         ("https://news.google.com/rss/search?q=Eurojust+(\"cross-border\"+OR+sanctions+OR+investigation)&hl=en-US&gl=US&ceid=US:en", "Eurojust (EN)"),
-        # Desinformación, FIMI y Análisis Técnico
         ("https://euvsdisinfo.eu/feed/", "EUvsDisinfo (EN)"),
         ("https://www.disinfo.eu/feed/", "EU DisinfoLab (EN)"),
         ("https://citizenlab.ca/feed/", "Citizen Lab (EN)"),
         ("https://chinadigitaltimes.net/feed/", "China Digital Times (EN/ZH)"),
         ("https://news.google.com/rss/search?q=(\"EEAS\"+OR+\"FIMI\"+OR+\"Doppelganger\")+disinformation&hl=en-US&gl=US&ceid=US:en", "EEAS FIMI (EN)"),
-        # Investigaciones OSINT y Crimen Organizado
         ("https://www.bellingcat.com/feed/", "Bellingcat OSINT (EN)"),
         ("https://theins.ru/feed", "The Insider (RU/EN)"),
         ("https://www.occrp.org/en/feed", "OCCRP (EN)"),
         ("https://news.google.com/rss/search?q=(\"RUSI\"+OR+\"CSIS\")+sabotage+Europe&hl=en-US&gl=US&ceid=US:en", "RUSI / CSIS (EN)"),
         ("https://www.rumafia.net/en/rss/", "RuMafia (EN)"),
         ("https://antikor.com.ua/articles.rss", "Antikor Portal (UA)"),
-        # Empresas de defensa y Seguridad España
         ("https://news.google.com/rss/search?q=(\"empresas+amenazadas+por+rusia\"+OR+Tecnobit+OR+Destinus+OR+Indra+OR+Navantia+OR+Escribano)&hl=es&gl=ES&ceid=ES:es", "Empresas Defensa (ES)"),
         ("https://news.google.com/rss/search?q=(CNI+OR+\"Guardia+Civil\"+OR+\"Policia+Nacional\")+(sabotaje+OR+espia+OR+ciberataque+OR+GRU)&hl=es&gl=ES&ceid=ES:es", "España Seguridad (ES)"),
         ("https://news.google.com/rss/search?q=(detenido+OR+arrestado)+(espia+ruso+OR+espia+chino+OR+sabotaje)&hl=es&gl=ES&ceid=ES:es", "Detenciones (ES)"),
         ("https://theobjective.com/feed/", "The Objective (ES)"),
-        # Guerra y frente en fuentes ruso/ucraniano
         ("https://news.google.com/rss/search?q=(\"Institute+for+the+Study+of+War\"+OR+\"ISW\")+Russian+offensive&hl=en-US&gl=US&ceid=US:en", "ISW War Studies (EN)"),
         ("https://kyivindependent.com/feed/", "The Kyiv Independent (EN)"),
         ("https://www.pravda.com.ua/rss/", "Ukrainska Pravda (UA)"),
         ("https://meduza.io/rss/all", "Meduza (RU/EN)"),
         ("https://news.google.com/rss/search?q=Россия+(диверсия+OR+шпионаж+OR+СБУ+OR+ГУР)&hl=ru&gl=RU&ceid=RU:ru", "Rusia Frente (RU)"),
         ("https://news.google.com/rss/search?q=Україна+(диверсія+OR+агент+OR+ГУР+OR+СБУ)&hl=uk&gl=UA&ceid=UA:uk", "Ucrania Frente (UA)"),
-        # Polonia y países bálticos (ABW / Sabotaje)
         ("https://news.google.com/rss/search?q=(Polska+OR+Poland)+(sabotaż+OR+szpiegostwo+OR+dywersja+OR+ABW+OR+Rosja)&hl=pl&gl=PL&ceid=PL:pl", "Polonia ABW (PL)"),
-        # Sanciones, flota fantasma y FININT
         ("https://news.google.com/rss/search?q=(OFAC+OR+\"OpenSanctions\"+OR+\"KSE+Institute\")+(Russia+OR+sanctions)&hl=en-US&gl=US&ceid=US:en", "OFAC Sanciones (EN)"),
         ("https://news.google.com/rss/search?q=(\"shadow+fleet\"+OR+\"dark+fleet\"+OR+\"sanctions+evasion\")+Russia&hl=en-US&gl=US&ceid=US:en", "Flota Fantasma (EN)"),
         ("https://news.google.com/rss/search?q=(crypto+OR+bitcoin+OR+USDT)+(Russia+OR+sanctions+OR+Garantex)&hl=en-US&gl=US&ceid=US:en", "FININT Cripto (EN)"),
-        # China y Asia-Pacífico
         ("https://news.google.com/rss/search?q=(China+OR+Beijing)+(espionage+OR+sabotage+OR+cyberattack+OR+MSS)&hl=en-US&gl=US&ceid=US:en", "China Injerencia (EN)"),
         ("https://news.google.com/rss/search?q=(中国+OR+北京)+(间谍+OR+网络攻击+OR+国安部)&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "China Intel (ZH)"),
-        # Árabe y Medio Oriente
         ("https://news.google.com/rss/search?q=(روسيا+OR+أوكرانيا+OR+الصين)+(تجسس+OR+طائرات+مسيرة)&hl=ar&gl=EG&ceid=EG:ar", "Intel Árabe (AR)")
     ]
 
@@ -557,7 +547,7 @@ def cargar_todas_las_fuentes():
     return unicos
 
 # ==========================================
-# 9. CABECERA TÁCTICA Y CONTROL
+# 9. CABECERA TÁCTICA ORIGINAL Y CONTROL
 # ==========================================
 logo_svg = """<svg width="65" height="65" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
     <circle cx="50" cy="50" r="47" fill="#1e293b" stroke="#334155" stroke-width="2" />
@@ -566,21 +556,38 @@ logo_svg = """<svg width="65" height="65" viewBox="0 0 100 100" fill="none" xmln
     <polygon points="53,24 37,48 48,48 43,72 61,44 51,44" fill="#ef4444" />
 </svg>"""
 
-st.markdown(f"""
-<div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); border-left: 8px solid #dc2626; border-radius: 10px; padding: 14px 22px; margin-bottom: 14px; display: flex; align-items: center; gap: 20px;">
-    <div>{logo_svg}</div>
-    <div>
-        <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 900; letter-spacing: 0.5px;">BUSCADOR DE AMENAZAS HÍBRIDAS</h1>
-        <p style="color: #94a3b8; font-size: 13.5px; margin: 4px 0 0 0;">SISTEMA GLOBAL DE VIGILANCIA OSINT // COBERTURA MULTILINGÜE</p>
+col_head1, col_head2 = st.columns([0.75, 0.25])
+with col_head1:
+    st.markdown(f"""
+    <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); border-left: 8px solid #dc2626; border-radius: 10px; padding: 14px 22px; margin-bottom: 14px; display: flex; align-items: center; gap: 20px;">
+        <div>{logo_svg}</div>
+        <div>
+            <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 900; letter-spacing: 0.5px;">BUSCADOR DE AMENAZAS HÍBRIDAS</h1>
+            <p style="color: #94a3b8; font-size: 13.5px; margin: 4px 0 0 0;">SISTEMA DE VIGILANCIA DE FUENTES ABIERTAS</p>
+        </div>
     </div>
-</div>
-""", unsafe_allow_html=True)
+    """, unsafe_allow_html=True)
+
+with col_head2:
+    # Widget web que actúa como el "botón derecho -> traducir" en el navegador
+    components.html("""
+    <div style="text-align: right; padding-top: 10px;">
+        <span style="font-size: 12px; color: #cbd5e1; font-family: sans-serif; font-weight: bold;">🌐 Traducir vista: </span>
+        <div id="google_translate_element" style="display: inline-block;"></div>
+    </div>
+    <script type="text/javascript">
+    function googleTranslateElementInit() {
+      new google.translate.TranslateElement({pageLanguage: 'auto', includedLanguages: 'es', layout: google.translate.TranslateElement.InlineLayout.SIMPLE}, 'google_translate_element');
+    }
+    </script>
+    <script type="text/javascript" src="//translate.google.com/translate.a/element.js?cb=googleTranslateElementInit"></script>
+    """, height=50)
 
 panel_estado = st.empty()
 
 if "alertas_base" not in st.session_state:
     with panel_estado.container():
-        st.info("🛰️ Sincronizando fuentes globales abiertas (ES, EN, RU, UA, PL, ZH, AR)...")
+        st.info("Sincronizando fuentes abiertas en tiempo real...")
         unicos = cargar_todas_las_fuentes()
         for item in unicos:
             cat = categorizar_alerta(item["titular_raw"], item["cuerpo_raw"], item["plataforma"], item["canal"])
@@ -599,7 +606,7 @@ with st.container():
     with c_flt1:
         busqueda_txt = st.text_input("🔍 Búsqueda Booleana (multilingüe):", placeholder='Ej: "shadow fleet" OR sabotaje -incendio')
     with c_flt2:
-        rango_tiempo = st.selectbox("📅 Ventana Temporal:", ["Últimas 24 Horas", "Últimas 48 Horas", "Última Semana", "Histórico Completo"], index=3)
+        rango_tiempo = st.selectbox("📅 Ventana Temporal:", ["Últimas 24 Horas", "Últimas 48 Horas", "Últimas 72 Horas", "Última Semana", "Histórico Completo"], index=4)
     with c_flt3:
         canales_sel = st.multiselect("Filtrar por Canal / Fuente:", sorted(list({a["canal"] for a in st.session_state.alertas_base})))
 
@@ -609,6 +616,8 @@ if rango_tiempo == "Últimas 24 Horas":
     alertas_visibles = [x for x in alertas_visibles if x["fecha_dt"] and cumple_ventana_temporal(x["fecha_dt"], 24)]
 elif rango_tiempo == "Últimas 48 Horas":
     alertas_visibles = [x for x in alertas_visibles if x["fecha_dt"] and cumple_ventana_temporal(x["fecha_dt"], 48)]
+elif rango_tiempo == "Últimas 72 Horas":
+    alertas_visibles = [x for x in alertas_visibles if x["fecha_dt"] and cumple_ventana_temporal(x["fecha_dt"], 72)]
 elif rango_tiempo == "Última Semana":
     alertas_visibles = [x for x in alertas_visibles if x["fecha_dt"] and cumple_ventana_temporal(x["fecha_dt"], 168)]
 
@@ -677,7 +686,7 @@ with col_s2:
 st.write("")
 
 # ==========================================
-# 11. RENDERIZADO VISUAL LIMPIO (SIN TRADUCTORES)
+# 11. RENDERIZADO CON BADGES (24H/48H/72H)
 # ==========================================
 def renderizar_tarjetas(lista_items):
     if not lista_items:
@@ -699,6 +708,17 @@ def renderizar_tarjetas(lista_items):
         enlace_seguro = url_sanitizada(item.get("enlace", ""))
         fecha_str = obtener_fecha_madrid_str(item["fecha_dt"]) if item["fecha_dt"] else "Fecha reciente"
 
+        # Badges temporales 24H, 48H y 72H
+        badges_tiempo = ""
+        if item["fecha_dt"]:
+            dif_horas = (datetime.now(timezone.utc) - item["fecha_dt"].astimezone(timezone.utc)).total_seconds() / 3600.0
+            if 0 <= dif_horas <= 24:
+                badges_tiempo = '<span style="background:#fee2e2; color:#991b1b; font-weight:800; font-size:11px; padding:2px 7px; border-radius:4px; border:1px solid #f87171; margin-right:6px;">⚡ 24H</span>'
+            elif 24 < dif_horas <= 48:
+                badges_tiempo = '<span style="background:#fef08a; color:#854d0e; font-weight:800; font-size:11px; padding:2px 7px; border-radius:4px; border:1px solid #eab308; margin-right:6px;">🔥 48H</span>'
+            elif 48 < dif_horas <= 72:
+                badges_tiempo = '<span style="background:#e0e7ff; color:#3730a3; font-weight:800; font-size:11px; padding:2px 7px; border-radius:4px; border:1px solid #818cf8; margin-right:6px;">🕒 72H</span>'
+
         # Foto lateral
         media_html = ""
         if item.get("multimedia") and es_url_segura(item["multimedia"]):
@@ -715,7 +735,7 @@ def renderizar_tarjetas(lista_items):
             f'<div style="display: flex; flex-wrap: wrap; align-items: flex-start;">'
             f'{media_html}'
             f'<div style="flex: 1; min-width: 260px;">'
-            f'<div style="font-size:11.5px; color:#64748b; margin-bottom:6px;">📅 {fecha_str} | 📢 {html_module.escape(item["canal"])}</div>'
+            f'<div style="font-size:11.5px; color:#64748b; margin-bottom:6px;">{badges_tiempo}📅 {fecha_str} | 📢 {html_module.escape(item["canal"])}</div>'
             f'<div style="font-size:16.5px; font-weight:800; color:#0f172a; margin-bottom:8px;">{html_module.escape(titular_mostrar)}</div>'
             f'{bloque_reporte}'
             f'<div style="background:#f0f9ff; border-left:4px solid #0284c7; padding:8px 12px; color:#0c4a6e; font-size:13px; margin-bottom:10px;">'
