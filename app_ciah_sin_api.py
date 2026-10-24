@@ -31,7 +31,7 @@ ZONA_MADRID = ZoneInfo("Europe/Madrid")
 RETENCION_HORAS = 240      # las alertas caducan a los 10 días
 VENTANA_TG_HORAS = 168     # Telegram: solo la última semana
 LIMITE_TARJETAS = 60       # tarjetas por pestaña antes de "Mostrar más"
-MAX_INTENTOS_TRAD = 3
+REFRESCO_SEG = 300         # el rastreo de fuentes se repite solo cada 5 min (segundo plano)
 
 # ==========================================
 # RECURSOS COMPARTIDOS (sobreviven a los reruns de Streamlit)
@@ -53,6 +53,9 @@ def obtener_recursos():
         "lock": threading.Lock(),
         "sem_trad": threading.Semaphore(6),
         "primera_vista": {},
+        "despertar": threading.Event(), "listo": threading.Event(), "snapshot": None,
+        "ocupado": False, "traduciendo": 0, "fallos": {}, "pausadas": {}, "hilo": None,
+        "deepl_key": "", "deepl_pausa": 0,
     }
 
 RECURSOS = obtener_recursos()
@@ -339,8 +342,38 @@ def trocear_texto(texto, limite=900):
         chunks.append(actual)
     return chunks
 
-def _llamar_traductor(texto):
-    """Devuelve (traducción, idioma_detectado) o (None, '') si todos los intentos fallan."""
+def _preparar_para_traducir(texto, max_chars=1500):
+    t = limpiar_html_texto(texto)
+    if len(t) > max_chars:
+        t = t[:max_chars].rsplit(" ", 1)[0]
+    return t
+
+def _clave_trad(t):
+    return hashlib.sha1(t.encode("utf-8")).hexdigest()
+
+def _llamar_deepl(texto):
+    """DeepL (opcional): solo si hay DEEPL_API_KEY en los secretos. Cuota gratuita: 500.000 caracteres/mes."""
+    clave = RECURSOS.get("deepl_key", "")
+    if not clave or time.time() < RECURSOS.get("deepl_pausa", 0):
+        return None, ""
+    host = "api-free.deepl.com" if clave.endswith(":fx") else "api.deepl.com"
+    try:
+        with RECURSOS["sem_trad"]:
+            r = SESION_HTTP.post(f"https://{host}/v2/translate",
+                                 headers={"Authorization": f"DeepL-Auth-Key {clave}"},
+                                 data={"text": texto, "target_lang": "ES"}, timeout=(3, 10))
+        if r.status_code == 200:
+            tr = r.json()["translations"][0]
+            return tr["text"], str(tr.get("detected_source_language", "")).lower()
+        if r.status_code == 456:      # cuota mensual agotada
+            RECURSOS["deepl_pausa"] = time.time() + 6 * 3600
+        elif r.status_code in (401, 403):
+            RECURSOS["deepl_pausa"] = time.time() + 3600
+    except Exception:
+        pass
+    return None, ""
+
+def _llamar_google(texto):
     for intento, client in enumerate(("gtx", "dict-chrome-ex", "gtx")):
         espera = 0
         try:
@@ -362,16 +395,30 @@ def _llamar_traductor(texto):
             time.sleep(espera)
     return None, ""
 
-def traducir_texto(texto, lang_hint="", max_chars=1500):
-    """Devuelve (texto_en_español, ok). Si ok es False NO se cachea y se reintentará."""
-    t = limpiar_html_texto(texto)
+def _llamar_traductor(texto):
+    """DeepL si hay clave y cuota; si no, el endpoint gratuito. Devuelve (traducción, idioma) o (None, '')."""
+    res, idioma = _llamar_deepl(texto)
+    if res is not None:
+        return res, idioma
+    return _llamar_google(texto)
+
+def traduccion_en_cache(texto, max_chars=1500):
+    """Solo consulta la caché (sin red). Devuelve (texto, True) o (None, False)."""
+    t = _preparar_para_traducir(texto, max_chars)
     if len(t) < 4:
         return t, True
-    if len(t) > max_chars:
-        t = t[:max_chars].rsplit(" ", 1)[0]
+    with RECURSOS["lock"]:
+        hit = RECURSOS["cache_trad"].get(_clave_trad(t))
+    return (hit, True) if hit else (None, False)
+
+def traducir_texto(texto, lang_hint="", max_chars=1500):
+    """Devuelve (texto_en_español, ok). Si ok es False NO se cachea y se reintentará."""
+    t = _preparar_para_traducir(texto, max_chars)
+    if len(t) < 4:
+        return t, True
     if lang_hint == "es" or parece_espanol(t):
         return t, True
-    clave = hashlib.sha1(t.encode("utf-8")).hexdigest()
+    clave = _clave_trad(t)
     with RECURSOS["lock"]:
         hit = RECURSOS["cache_trad"].get(clave)
     if hit:
@@ -383,7 +430,9 @@ def traducir_texto(texto, lang_hint="", max_chars=1500):
             return t, False
         salida.append(res.strip())
         idiomas.append(idioma)
-    if idiomas and all(i.startswith("es") for i in idiomas if i) and all(idiomas):
+    if idiomas and all(idiomas) and all(i.startswith("es") for i in idiomas):
+        with RECURSOS["lock"]:
+            RECURSOS["cache_trad"][clave] = t       # ya estaba en español
         return t, True
     trad = limpiar_html_texto(" ".join(salida))
     if len(trad) < 2 or proporcion_no_latina(trad) > 0.30:
@@ -396,34 +445,43 @@ def traducir_lote(tareas):
     """tareas: lista de (texto, lang_hint) -> lista de (texto_es, ok)."""
     if not tareas:
         return []
-    with ThreadPoolExecutor(max_workers=8) as ex:
+    with ThreadPoolExecutor(max_workers=6) as ex:
         return list(ex.map(lambda p: traducir_texto(p[0], p[1]), tareas))
 
-def traducir_pendientes(alertas):
-    pend = [a for a in alertas if not a.get("traducido_ok") and a.get("trad_intentos", 0) < MAX_INTENTOS_TRAD]
+def aplicar_cache_traducciones(alertas):
+    """Recoge de la caché los titulares que el hilo de fondo ya tradujo. Instantáneo, sin red."""
+    cambiadas = []
+    for a in alertas:
+        if a.get("traducido_ok"):
+            continue
+        txt, ok = traduccion_en_cache(a["titular_raw"])
+        if ok:
+            a["titular_es"], a["traducido_ok"] = txt, True
+            cambiadas.append(a)
+    return cambiadas
+
+def traducir_titulares_pendientes(alertas, limite=60):
+    """Botón 'Traducir ahora': traduce los titulares pendientes más recientes."""
+    pend = sorted((a for a in alertas if a.get("extranjero") and not a["traducido_ok"]),
+                  key=lambda a: a["fecha_dt"], reverse=True)[:limite]
     if not pend:
-        return pend
-    tareas = []
-    for a in pend:
-        tareas.append((a["titular_raw"], a.get("lang", "")))
-        tareas.append((a["cuerpo_raw"], a.get("lang", "")))
-    res = traducir_lote(tareas)
-    for i, a in enumerate(pend):
-        (t_es, ok_t), (c_es, ok_c) = res[2 * i], res[2 * i + 1]
-        a["titular_es"], a["cuerpo_es"] = t_es, c_es
-        a["traducido_ok"] = bool(ok_t and ok_c)
-        if not a["traducido_ok"]:
-            a["trad_intentos"] = a.get("trad_intentos", 0) + 1
-    return pend
+        return []
+    res = traducir_lote([(a["titular_raw"], a.get("lang", "")) for a in pend])
+    hechas = []
+    for a, (t, ok) in zip(pend, res):
+        if ok:
+            a["titular_es"], a["traducido_ok"] = t, True
+            hechas.append(a)
+    return hechas
 
 def titular_visible(a, traducir):
-    t = a["titular_es"] if (traducir and a.get("titular_es")) else a["titular_raw"]
+    t = a["titular_es"] if (traducir and a.get("traducido_ok") and a.get("titular_es")) else a["titular_raw"]
     if a["plataforma"] == "TELEGRAM":
         return f"[{a['canal'].replace('@', '').upper()}] {t}"
     return t
 
 def cuerpo_visible(a, traducir):
-    return a["cuerpo_es"] if (traducir and a.get("cuerpo_es")) else a["cuerpo_raw"]
+    return a["cuerpo_es"] if (traducir and a.get("cuerpo_ok") and a.get("cuerpo_es")) else a["cuerpo_raw"]
 
 # ==========================================
 # CLASIFICACIÓN, NER Y CONTEXTO
@@ -695,7 +753,7 @@ def crear_item(id_, plataforma, canal, titulo, cuerpo, enlace, dt, lang="", medi
 # ==========================================
 # RASTREADORES (no tocan st.session_state: se ejecutan en hilos)
 # ==========================================
-def _get(url, timeout=(4, 9)):
+def _get(url, timeout=(3, 6)):
     return SESION_HTTP.get(url, timeout=timeout)
 
 def raspar_youtube_canal(canal_id, etiqueta):
@@ -855,24 +913,111 @@ FUENTES_RSS = [
     ("https://antikor.com.ua/articles.rss", "Antikor Portal", "", "INVESTIGACIÓN"),
 ]
 
-@st.cache_data(ttl=600, show_spinner=False)
-def obtener_brutos():
-    """Scraping compartido entre sesiones durante 10 minutos."""
-    items, errores = [], []
-    with ThreadPoolExecutor(max_workers=24) as ex:
-        futs = [ex.submit(raspar_youtube_canal, cid, tag) for cid, tag in CANALES_YT]
-        futs += [ex.submit(raspar_un_canal_tg, c) for c in CANALES_TG]
-        futs += [ex.submit(procesar_feed, f) for f in FUENTES_RSS]
-        for f in as_completed(futs):
-            try:
-                its, err = f.result()
+def obtener_clave_deepl():
+    try:
+        return str(st.secrets.get("DEEPL_API_KEY", "")).strip()
+    except Exception:
+        return ""
+
+def _correr_fuente(nombre, fn, args):
+    t0 = time.time()
+    try:
+        items, err = fn(*args)
+    except Exception as e:
+        items, err = [], f"{nombre} ({type(e).__name__})"
+    return nombre, items, err, time.time() - t0
+
+def rastrear_todo():
+    """Rastrea todas las fuentes en paralelo. Las que fallan 3 veces seguidas se pausan 1 hora."""
+    tareas = [(tag, raspar_youtube_canal, (cid, tag)) for cid, tag in CANALES_YT]
+    tareas += [(f"Telegram @{c}", raspar_un_canal_tg, (c,)) for c in CANALES_TG]
+    tareas += [(f[1], procesar_feed, (f,)) for f in FUENTES_RSS]
+    ahora = time.time()
+    activas, pausadas = [], []
+    for nombre, fn, args in tareas:
+        hasta = RECURSOS["pausadas"].get(nombre, 0)
+        if ahora < hasta:
+            pausadas.append(f"{nombre} (pausada {int((hasta - ahora) / 60) + 1} min)")
+        else:
+            activas.append((nombre, fn, args))
+    items, errores, lentas = [], [], []
+    if activas:
+        with ThreadPoolExecutor(max_workers=40) as ex:
+            futs = [ex.submit(_correr_fuente, *t) for t in activas]
+            for f in as_completed(futs):
+                nombre, its, err, dur = f.result()
                 items.extend(its)
                 if err:
                     errores.append(err)
-            except Exception as e:
-                errores.append(f"Fuente ({type(e).__name__})")
+                    n = RECURSOS["fallos"].get(nombre, 0) + 1
+                    if n >= 3:
+                        RECURSOS["pausadas"][nombre] = time.time() + 3600
+                        n = 0
+                    RECURSOS["fallos"][nombre] = n
+                else:
+                    RECURSOS["fallos"][nombre] = 0
+                if dur > 6:
+                    lentas.append(f"{nombre} ({dur:.0f}s)")
     items = [i for i in items if cumple_ventana_temporal(i["fecha_dt"], RETENCION_HORAS)]
-    return items, errores
+    return items, sorted(set(errores)), sorted(lentas), sorted(pausadas)
+
+def pretraducir_titulos(items):
+    """Traduce en segundo plano los titulares de las últimas 72 h y los deja en la caché."""
+    pend = [b for b in items
+            if b.get("lang") != "es" and cumple_ventana_temporal(b["fecha_dt"], 72)
+            and not parece_espanol(f"{b['titular_raw']} {b['cuerpo_raw'][:400]}")]
+    pend.sort(key=lambda b: b["fecha_dt"], reverse=True)
+    if not pend:
+        return
+    RECURSOS["traduciendo"] = len(pend)
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        list(ex.map(lambda b: traducir_texto(b["titular_raw"], b.get("lang", "")), pend))
+
+def _ejecutar_rastreo():
+    RECURSOS["ocupado"] = True
+    items = []
+    try:
+        items, errores, lentas, pausadas = rastrear_todo()
+        with RECURSOS["lock"]:
+            RECURSOS["snapshot"] = {"items": items, "errores": errores, "lentas": lentas,
+                                    "pausadas": pausadas, "ts": time.time()}
+        RECURSOS["listo"].set()
+    finally:
+        RECURSOS["ocupado"] = False
+    try:
+        pretraducir_titulos(items)
+    except Exception:
+        pass
+    finally:
+        RECURSOS["traduciendo"] = 0
+
+def _bucle_refresco():
+    while True:
+        try:
+            _ejecutar_rastreo()
+        except Exception:
+            pass
+        RECURSOS["despertar"].wait(timeout=REFRESCO_SEG)
+        RECURSOS["despertar"].clear()
+
+def asegurar_refresco():
+    with RECURSOS["lock"]:
+        h = RECURSOS.get("hilo")
+        if h is not None and h.is_alive():
+            return
+        h = threading.Thread(target=_bucle_refresco, daemon=True, name="refresco-osint")
+        RECURSOS["hilo"] = h
+        h.start()
+
+def obtener_snapshot(esperar=90):
+    """Devuelve el último rastreo sin esperar (salvo en el primer arranque)."""
+    if RECURSOS["snapshot"] is None:
+        RECURSOS["listo"].wait(timeout=esperar)
+    snap = RECURSOS["snapshot"]
+    if snap is None:
+        return {"items": [], "errores": ["El primer rastreo aún no ha terminado: pulsa BUSCAR NOVEDADES en unos segundos."],
+                "lentas": [], "pausadas": [], "ts": None}
+    return snap
 
 # ==========================================
 # DEDUPLICACIÓN
@@ -908,9 +1053,17 @@ def fusionar_en(destino, origen):
 
 def nueva_alerta(b):
     a = dict(b)
-    a.update({"titular_es": "", "cuerpo_es": "", "traducido_ok": False, "trad_intentos": 0,
-              "canales_correlacionados": [b["canal"]], "fuentes_coincidentes": [],
-              "categoria": "GLOBAL", "etiquetas_ner": [], "evaluacion_contexto": "", "corpus_norm": ""})
+    extranjero = b.get("lang") != "es" and not parece_espanol(f"{b['titular_raw']} {b['cuerpo_raw'][:400]}")
+    a.update({
+        "extranjero": extranjero,
+        "titular_es": "" if extranjero else b["titular_raw"],
+        "cuerpo_es": "" if extranjero else b["cuerpo_raw"],
+        "traducido_ok": not extranjero,
+        "cuerpo_ok": (not extranjero) or not b["cuerpo_raw"],
+        "error_traduccion": False,
+        "canales_correlacionados": [b["canal"]], "fuentes_coincidentes": [],
+        "categoria": "GLOBAL", "etiquetas_ner": [], "evaluacion_contexto": "", "corpus_norm": "",
+    })
     return a
 
 def consolidar_traducidos(alertas, ids_nuevos):
@@ -927,12 +1080,9 @@ def consolidar_traducidos(alertas, ids_nuevos):
         resultado.append(a)
     return resultado
 
-def ejecutar_actualizacion(traducir=True, forzar=False):
-    if forzar:
-        obtener_brutos.clear()
-    brutos, errores = obtener_brutos()
-    st.session_state.errores_fuentes = errores
-
+def ejecutar_actualizacion(snap):
+    """Incorpora el último rastreo (instantáneo: no hay red ni traducción aquí)."""
+    brutos = snap["items"]
     base = [a for a in st.session_state.get("alertas_monitor", [])
             if cumple_ventana_temporal(a["fecha_dt"], RETENCION_HORAS)]
     ids = {a["id"] for a in base}
@@ -956,8 +1106,7 @@ def ejecutar_actualizacion(traducir=True, forzar=False):
 
     alertas = base + nuevos
     ids_nuevos = {a["id"] for a in nuevos}
-    if traducir:
-        traducir_pendientes(alertas)
+    aplicar_cache_traducciones(alertas)
     alertas = consolidar_traducidos(alertas, ids_nuevos)
     for a in alertas:
         enriquecer(a)
@@ -965,6 +1114,7 @@ def ejecutar_actualizacion(traducir=True, forzar=False):
 
     st.session_state.alertas_monitor = alertas
     st.session_state.ultima_actualizacion = obtener_fecha_madrid_str()
+    st.session_state.snap_ingerido = snap["ts"]
     sel = st.session_state.setdefault("seleccionadas_pdf", set())
     for a in alertas:
         if a["id"] in ids_nuevos:
@@ -1086,10 +1236,18 @@ def toggle_checkbox_callback(item_id):
 def mostrar_mas(clave):
     st.session_state[clave] = st.session_state.get(clave, LIMITE_TARJETAS) + LIMITE_TARJETAS
 
-def reintentar_traducciones():
-    for a in st.session_state.get("alertas_monitor", []):
-        if not a.get("traducido_ok"):
-            a["trad_intentos"] = 0
+def traducir_alerta_callback(item_id):
+    a = next((x for x in st.session_state.get("alertas_monitor", []) if x["id"] == item_id), None)
+    if not a:
+        return
+    t_es, ok_t = traducir_texto(a["titular_raw"], a.get("lang", ""))
+    c_es, ok_c = traducir_texto(a["cuerpo_raw"], a.get("lang", ""))
+    if ok_t:
+        a["titular_es"], a["traducido_ok"] = t_es, True
+    if ok_c:
+        a["cuerpo_es"], a["cuerpo_ok"] = c_es, True
+    a["error_traduccion"] = not (ok_t and ok_c)
+    enriquecer(a)
 
 # ==========================================
 # ACCESO
@@ -1202,8 +1360,8 @@ def renderizar_tarjetas(lista, auto_traducir, clave_tab):
             badges += '<span class="badge-item" style="background:#ffe4e6;color:#be123c;border:1px solid #fda4af;">📢 LISTA FIMI</span>'
         if len(item.get("canales_correlacionados", [])) > 1:
             badges += f'<span class="badge-item" style="background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;">🔄 {len(item["canales_correlacionados"])} MEDIOS</span>'
-        if auto_traducir and not item["traducido_ok"] and item.get("lang") != "es":
-            badges += '<span class="badge-item" style="background:#fef3c7;color:#92400e;border:1px solid #fbbf24;">⚠️ SIN TRADUCIR</span>'
+        if auto_traducir and item.get("extranjero") and not item["traducido_ok"]:
+            badges += '<span class="badge-item" style="background:#fef3c7;color:#92400e;border:1px solid #fbbf24;">⏳ SIN TRADUCIR</span>'
 
         pildoras = "".join(f'<span class="ner-pill" style="background-color:{c};">{esc(n)}</span>'
                            for n, c in item.get("etiquetas_ner", []))
@@ -1235,6 +1393,10 @@ def renderizar_tarjetas(lista, auto_traducir, clave_tab):
                         args=(item_id,), label_visibility="collapsed")
         with c_card:
             st.markdown(tarjeta, unsafe_allow_html=True)
+            if item.get("extranjero") and (not item["traducido_ok"] or (cat in ("TELEGRAM", "REDES") and not item["cuerpo_ok"])):
+                st.button("🌐 Traducir texto", key=f"tr_{item_id}", on_click=traducir_alerta_callback, args=(item_id,))
+            if item.get("error_traduccion"):
+                st.caption("⚠️ El servicio de traducción no respondió. Inténtalo de nuevo en unos segundos.")
             texto_copia = (f"🚨 ALERTA OSINT | {cat}\nTitular: {titulo}\n"
                            f"Fuente: {item['canal']} | Fecha: {fecha_str} (Madrid)\nEnlace: {item['enlace']}")
             with st.expander("📋 Formato para copiar alerta"):
@@ -1268,36 +1430,47 @@ def main():
 
     st.session_state.setdefault("check_traducir", True)
     st.session_state.setdefault("seleccionadas_pdf", set())
-    st.session_state.setdefault("errores_fuentes", [])
+    RECURSOS["deepl_key"] = obtener_clave_deepl()
+    asegurar_refresco()
 
     st.markdown(
         f'<div class="tactical-header"><div>{LOGO_SVG}</div><div class="header-titles">'
         f'<h1>BUSCADOR DE AMENAZAS HÍBRIDAS</h1><p>SISTEMA DE VIGILANCIA DE FUENTES ABIERTAS</p></div></div>',
         unsafe_allow_html=True)
 
-    if "arranque_inicial_ok" not in st.session_state:
-        with st.spinner("Sincronizando fuentes abiertas..."):
-            ejecutar_actualizacion(traducir=st.session_state["check_traducir"])
-        st.session_state.arranque_inicial_ok = True
-        st.rerun()
+    # Sesiones antiguas con otro formato de alertas: se reinician
+    if any("cuerpo_ok" not in a for a in st.session_state.get("alertas_monitor", [])):
+        st.session_state.alertas_monitor = []
+        st.session_state.pop("snap_ingerido", None)
+
+    if RECURSOS["snapshot"] is None:
+        with st.spinner("Primer rastreo de fuentes abiertas (solo al arrancar)..."):
+            snap = obtener_snapshot()
+    else:
+        snap = obtener_snapshot()
+    if "alertas_monitor" not in st.session_state or snap["ts"] != st.session_state.get("snap_ingerido"):
+        ejecutar_actualizacion(snap)
 
     auto_traducir = bool(st.session_state.get("check_traducir", True))
     alertas = st.session_state.get("alertas_monitor", [])
 
-    # Traducción pendiente (solo lo que falta; lo ya traducido está en caché)
-    if auto_traducir:
-        pend = [a for a in alertas if not a["traducido_ok"] and a["trad_intentos"] < MAX_INTENTOS_TRAD]
-        if pend:
-            with st.spinner(f"Traduciendo {len(pend)} alertas al español..."):
-                hechas = traducir_pendientes(alertas)
-                for a in hechas:
-                    enriquecer(a)
+    # Titulares que el hilo de fondo ya tradujo (instantáneo)
+    cambiadas = aplicar_cache_traducciones(alertas)
+    if cambiadas:
+        for a in cambiadas:
+            enriquecer(a)
+        alertas = consolidar_traducidos(alertas, {a["id"] for a in cambiadas})
+        st.session_state.alertas_monitor = alertas
+
+    aviso = st.session_state.pop("aviso", None)
+    if aviso:
+        st.info(aviso)
 
     # ---------- Barra lateral ----------
     with st.sidebar:
         st.subheader("🔍 Filtros de Búsqueda")
         busqueda = st.text_input("Búsqueda booleana:", placeholder='"flota fantasma" OR (sabotaje AND Polonia) -incendio',
-                                 help='Admite "frases exactas", AND, OR, NOT o "-", y paréntesis.')
+                                 help='Admite "frases exactas", AND, OR, NOT o "-", y paréntesis. Busca en el texto original y en lo ya traducido.')
         rango = st.selectbox("📅 Ventana temporal:", ["Últimas 24 Horas", "Últimas 48 Horas", "Última Semana", "Todo el Histórico"], index=2)
         canales_sel = st.multiselect("Filtrar por periódicos / canales:", sorted({a["canal"] for a in alertas}))
         cat_sel = st.multiselect("Filtrar por categoría:", [c for c, *_ in SECCIONES])
@@ -1317,15 +1490,19 @@ def main():
         datos = [x for x in datos if x["categoria"] in cat_sel]
 
     # ---------- Botonera ----------
-    c1, c2, c3, c4, c5 = st.columns([1.1, 1.0, 1.2, 1.2, 1.6])
+    c1, c2, c3, c4, c5 = st.columns([1.1, 1.0, 1.2, 1.2, 1.7])
     with c1:
-        if st.button("🔄 ACTUALIZAR FUENTES", type="primary", use_container_width=True):
-            with st.spinner("Sincronizando fuentes abiertas..."):
-                ejecutar_actualizacion(traducir=auto_traducir, forzar=True)
+        if st.button("🔄 BUSCAR NOVEDADES", type="primary", use_container_width=True):
+            edad = (time.time() - snap["ts"]) if snap["ts"] else None
+            if edad is None or edad > 45:
+                RECURSOS["despertar"].set()
+                st.session_state.aviso = "Rastreo lanzado en segundo plano. Las novedades aparecerán en tu próxima interacción (suele tardar 15-40 s)."
+            else:
+                st.session_state.aviso = "Los datos ya están al día (rastreo de hace menos de 45 s)."
             st.rerun()
     with c2:
         st.checkbox("🌐 Auto-Traducir", key="check_traducir",
-                    help="Muestra titulares y textos en español. Se aplica al instante; lo ya traducido no se repite.")
+                    help="Muestra titulares y textos en español cuando están traducidos. Es instantáneo; los titulares se traducen solos en segundo plano.")
     para_informe = [x for x in datos if x["id"] in st.session_state.seleccionadas_pdf]
     marca = datetime.now(ZONA_MADRID).strftime("%Y%m%d_%H%M")
     with c3:
@@ -1337,11 +1514,16 @@ def main():
                            data=generar_informe_markdown(para_informe, auto_traducir),
                            file_name=f"Informe_Amenazas_{marca}.md", mime="text/markdown", use_container_width=True)
     with c5:
-        if "ultima_actualizacion" in st.session_state:
-            st.markdown(
-                f'<div style="font-size:12.5px;color:#94a3b8;margin-top:4px;">🕒 <strong>Última sincronización:</strong> '
-                f'{st.session_state.ultima_actualizacion} (Madrid)<br>Mostrando <strong>{len(datos)}</strong> alertas ({esc(rango)}).</div>',
-                unsafe_allow_html=True)
+        estado = []
+        if RECURSOS["ocupado"]:
+            estado.append("⏳ rastreando fuentes")
+        if RECURSOS["traduciendo"]:
+            estado.append("🌐 traduciendo titulares en segundo plano")
+        edad_txt = f"hace {int((time.time() - snap['ts']) / 60)} min" if snap["ts"] else "pendiente"
+        st.markdown(
+            f'<div style="font-size:12.5px;color:#94a3b8;margin-top:4px;">🕒 <strong>Último rastreo:</strong> {edad_txt}'
+            f'{" · " + " · ".join(estado) if estado else ""}<br>Mostrando <strong>{len(datos)}</strong> alertas ({esc(rango)}).</div>',
+            unsafe_allow_html=True)
 
     ids_visibles = [x["id"] for x in datos]
     s1, s2, _ = st.columns([1.2, 1.2, 4.0])
@@ -1350,18 +1532,32 @@ def main():
     with s2:
         st.button("⬜ Desmarcar visibles", use_container_width=True, on_click=desmarcar_todas_callback, args=(ids_visibles,))
 
-    fallidas = [a for a in alertas if auto_traducir and not a["traducido_ok"] and a.get("lang") != "es"]
-    if fallidas:
-        cc1, cc2 = st.columns([3, 1])
-        with cc1:
-            st.warning(f"⚠️ {len(fallidas)} alertas sin traducir (el servicio de traducción no respondió o está saturado). Se muestran en su idioma original.")
-        with cc2:
-            st.button("🔁 Reintentar traducción", use_container_width=True, on_click=reintentar_traducciones)
+    pend = [a for a in alertas if a.get("extranjero") and not a["traducido_ok"]]
+    if auto_traducir and pend:
+        p1, p2 = st.columns([3, 1])
+        with p1:
+            st.caption(f"⏳ {len(pend)} titulares sin traducir todavía: se traducen solos en segundo plano. "
+                       f"También puedes traducirlos ahora o pulsar 🌐 en cada tarjeta.")
+        with p2:
+            if st.button(f"🌐 Traducir ahora ({min(len(pend), 60)})", use_container_width=True):
+                with st.spinner("Traduciendo titulares..."):
+                    hechas = traducir_titulares_pendientes(alertas, 60)
+                    for a in hechas:
+                        enriquecer(a)
+                st.session_state.aviso = f"Traducidos {len(hechas)} titulares." + (
+                    "" if hechas else " El servicio de traducción no respondió; prueba de nuevo en un momento.")
+                st.rerun()
 
-    if st.session_state.errores_fuentes:
-        with st.expander(f"⚠️ Diagnóstico: {len(st.session_state.errores_fuentes)} fuentes con error o sin respuesta"):
-            for e in sorted(set(st.session_state.errores_fuentes)):
-                st.caption(f"• {e}")
+    n_diag = len(snap["errores"]) + len(snap["lentas"]) + len(snap["pausadas"])
+    if n_diag:
+        with st.expander(f"⚠️ Diagnóstico de fuentes: {len(snap['errores'])} con error, "
+                         f"{len(snap['lentas'])} lentas, {len(snap['pausadas'])} en pausa"):
+            for titulo, lista in (("Con error", snap["errores"]), ("Lentas (>6 s)", snap["lentas"]),
+                                  ("En pausa (3 fallos seguidos; se reintentan en 1 h)", snap["pausadas"])):
+                if lista:
+                    st.markdown(f"**{titulo}**")
+                    for e in lista:
+                        st.caption(f"• {e}")
 
     st.write("")
     listas = {cod: [x for x in datos if x["categoria"] == cod] for cod, *_ in SECCIONES}
