@@ -25,13 +25,13 @@ import io
 # CONFIGURACIÓN DE PÁGINA STREAMLIT
 # ==========================================
 st.set_page_config(
-    page_title="Analizador de Amenazas Híbridas",
+    page_title="Buscador de Amenazas Híbridas",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Zona horaria de referencia nacional
+# Zona horaria de referencia (Madrid, España)
 ZONA_MADRID = ZoneInfo("Europe/Madrid")
 
 def obtener_fecha_madrid_str(dt=None):
@@ -43,7 +43,7 @@ def obtener_fecha_madrid_str(dt=None):
     return dt_madrid.strftime("%d/%m/%Y %H:%M:%S")
 
 # ==========================================
-# BLINDAJE VISUAL DEFINITIVO (ANTI-GITHUB / PERFIL)
+# BLINDAJE VISUAL (ANTI-GITHUB / PERFIL / MANAGE APP)
 # ==========================================
 st.markdown("""
 <style>
@@ -131,7 +131,7 @@ def gestionar_acceso():
     st.markdown("""
         <div style="max-width: 470px; margin: 40px auto 20px auto; padding: 26px; background: #0f172a; border-radius: 12px; border-left: 6px solid #dc2626; color: white; box-shadow: 0 16px 36px rgba(0,0,0,0.6);">
             <h2 style="margin-top: 0; color: #ffffff; font-size: 21px; letter-spacing: 0.5px;">🔒 Acceso Restringido</h2>
-            <p style="color: #94a3b8; font-size: 13.5px; margin-bottom: 0;">Sistema de Inteligencia de Amenazas Híbridas (OSINT). Introduzca la credencial operativa autorizada.</p>
+            <p style="color: #94a3b8; font-size: 13.5px; margin-bottom: 0;">Sistema de Vigilancia de Fuentes Abiertas. Introduzca la credencial autorizada para continuar.</p>
         </div>
     """, unsafe_allow_html=True)
 
@@ -157,11 +157,11 @@ if not gestionar_acceso():
     st.stop()
 
 # ==========================================
-# SESIÓN HTTP CON REINTENTOS
+# SESIÓN HTTP ROBUSTA
 # ==========================================
 SESION_HTTP = requests.Session()
 retries = Retry(total=2, backoff_factor=0.3, status_forcelist=[500, 502, 503, 504])
-adapter = HTTPAdapter(pool_connections=40, pool_maxsize=40, max_retries=retries)
+adapter = HTTPAdapter(pool_connections=50, pool_maxsize=50, max_retries=retries)
 SESION_HTTP.mount("https://", adapter)
 SESION_HTTP.mount("http://", adapter)
 SESION_HTTP.headers.update({
@@ -173,7 +173,7 @@ CACHE_TITULARES_GLOBAL = {}
 CACHE_LOCK = threading.Lock()
 
 # ==========================================
-# LIMPIEZA DE CADENAS Y TEXTO
+# LIMPIEZA DE CADENAS Y FECHAS
 # ==========================================
 def limpiar_html_texto(texto):
     if not texto:
@@ -217,14 +217,15 @@ def limpiar_url(url):
 def es_url_segura(url):
     return str(url).startswith("http://") or str(url).startswith("https://")
 
-def es_reciente_24h(fecha_dt):
+def es_reciente_ventana(fecha_dt, horas=120):
+    """Ventana flexible (por defecto 5 días) para no perder investigaciones profundas"""
     if not fecha_dt:
-        return False
+        return True
     if fecha_dt.tzinfo is None:
         fecha_dt = fecha_dt.replace(tzinfo=timezone.utc)
     ahora = datetime.now(timezone.utc)
     diferencia = ahora - fecha_dt.astimezone(timezone.utc)
-    return timedelta(seconds=0) <= diferencia <= timedelta(hours=24)
+    return timedelta(seconds=0) <= diferencia <= timedelta(hours=horas)
 
 def es_reciente_48h(fecha_dt):
     if not fecha_dt:
@@ -256,7 +257,7 @@ def decodificar_url_google_news_offline(url_rss):
     return url_rss
 
 # ==========================================
-# TRADUCTOR ROBUSTO ANTI-BLOQUEO
+# TRADUCTOR ANTI-BLOQUEO
 # ==========================================
 def traducir_un_titular_individual(titular_orig):
     if not titular_orig:
@@ -276,7 +277,7 @@ def traducir_un_titular_individual(titular_orig):
         medio_suffix = m_medio.group(1)
         texto_a_traducir = t_clean[:m_medio.start()].strip()
 
-    time.sleep(random.uniform(0.04, 0.08))
+    time.sleep(random.uniform(0.03, 0.07))
 
     for _ in range(2):
         try:
@@ -303,7 +304,7 @@ def traducir_un_titular_individual(titular_orig):
     return t_clean
 
 def traducir_lote_titulares(lista_titulares):
-    with ThreadPoolExecutor(max_workers=5) as ex:
+    with ThreadPoolExecutor(max_workers=6) as ex:
         resultados = list(ex.map(traducir_un_titular_individual, lista_titulares))
     return resultados
 
@@ -556,7 +557,7 @@ def raspar_youtube_canal(canal_id, etiqueta):
         r = SESION_HTTP.get(url, timeout=3.0)
         if r.status_code == 200:
             root = ET.fromstring(r.content)
-            for entry in root.findall(".//{http://www.w3.org/2005/Atom}entry")[:10]:
+            for entry in root.findall(".//{http://www.w3.org/2005/Atom}entry")[:15]:
                 tit_tag = entry.find("{http://www.w3.org/2005/Atom}title")
                 tit_orig = limpiar_html_texto(tit_tag.text if tit_tag is not None else "")
 
@@ -618,7 +619,7 @@ def raspar_un_canal_tg(canal):
 
         es_red_social = canal in ["ASupersharij", "rybar"]
 
-        for p in posts[-30:]:
+        for p in posts[-40:]:
             time_tag = p.find("time")
             dt_obj = datetime.now(timezone.utc)
             if time_tag and time_tag.get("datetime"):
@@ -627,7 +628,7 @@ def raspar_un_canal_tg(canal):
                 except Exception:
                     pass
 
-            if not es_reciente_24h(dt_obj):
+            if not es_reciente_ventana(dt_obj, horas=96):
                 continue
 
             t_div = p.find("div", class_="tgme_widget_message_text")
@@ -720,7 +721,7 @@ def raspar_rumafia():
         r = SESION_HTTP.get(url, timeout=3.5)
         if r.status_code == 200:
             root = ET.fromstring(r.content)
-            for item in root.findall(".//item")[:15]:
+            for item in root.findall(".//item")[:25]:
                 tit = limpiar_html_texto(item.findtext("title", ""))
                 desc = limpiar_html_texto(item.findtext("description", ""))
                 link = item.findtext("link", "")
@@ -754,7 +755,7 @@ def raspar_antikor():
         r = SESION_HTTP.get(url, timeout=3.5)
         if r.status_code == 200:
             root = ET.fromstring(r.content)
-            for item in root.findall(".//item")[:15]:
+            for item in root.findall(".//item")[:25]:
                 tit = limpiar_html_texto(item.findtext("title", ""))
                 desc = limpiar_html_texto(item.findtext("description", ""))
                 link = item.findtext("link", "")
@@ -782,7 +783,7 @@ def raspar_antikor():
     return items
 
 # ==========================================
-# RECOLECTOR RSS PRENSA MULTILINGÜE
+# RECOLECTOR RSS PRENSA MULTILINGÜE (PROFUNDIDAD AUMENTADA)
 # ==========================================
 def procesar_un_feed_rss(datos_feed):
     url, etiqueta = datos_feed
@@ -792,7 +793,8 @@ def procesar_un_feed_rss(datos_feed):
         if r.status_code != 200:
             return []
         root = ET.fromstring(r.content)
-        for item in root.findall(".//item")[:20]:
+        # Procesamos hasta 40 entradas por feed para asegurar fondo documental
+        for item in root.findall(".//item")[:40]:
             tit_orig = limpiar_html_texto(item.findtext("title", ""))
             desc_orig = item.findtext("description", "")
             link = item.findtext("link", "")
@@ -843,7 +845,7 @@ def barrido_prensa_multilingue():
         ("https://news.google.com/rss/search?q=(China+OR+Beijing)+(espionage+OR+sabotage+OR+cyberattack+OR+\"hybrid+warfare\")+West&hl=en-US&gl=US&ceid=US:en", "China Intel (EN)"),
         ("https://news.google.com/rss/search?q=China+Taiwan+(military+OR+sabotage+OR+cyber+OR+espionage)&hl=en-US&gl=US&ceid=US:en", "Asia Pacific Watch (EN)"),
 
-        # EMPRESAS ESPAÑOLAS AMENAZADAS
+        # EMPRESAS E INDUSTRIA DE DEFENSA
         ("https://news.google.com/rss/search?q=(\"empresas+amenazadas+por+rusia\"+OR+\"empresa+amenazada+por+rusia\"+OR+(Tecnobit+OR+Oesia+OR+Destinus+OR+Indra+OR+Navantia+OR+Escribano)+AND+(Rusia+OR+Kremlin+OR+Putin+OR+amenaza))&hl=es&gl=ES&ceid=ES:es", "Empresas Amenazadas (ES)"),
         ("https://news.google.com/rss/search?q=(Destinus+OR+Kokorich)+(Rusia+OR+Ucrania+OR+drones+OR+frente)&hl=es&gl=ES&ceid=ES:es", "Destinus / Drones (ES)"),
 
@@ -881,7 +883,7 @@ def barrido_prensa_multilingue():
     return todas
 
 # ==========================================
-# ACTUALIZACIÓN CENTRAL
+# ACTUALIZACIÓN CENTRAL CON PERSISTENCIA
 # ==========================================
 def son_mismo_evento(tit1, tit2):
     t1 = re.sub(r'^(última hora|exclusiva|urgente|video)[:\-]?\s*', '', normalizar_texto(limpiar_firma_medio(re.sub(r'\[.*?\]', '', tit1))))
@@ -904,7 +906,25 @@ def ejecutar_actualizacion_total():
         brutos_rumafia = f_rumafia.result()
         brutos_antikor = f_antikor.result()
 
+    # Combinamos lo nuevo con el fondo documental ya existente en memoria
+    anteriores = st.session_state.get("alertas_monitor", [])
     todos_brutos = brutos_tg + brutos_yt + brutos_prensa + brutos_rumafia + brutos_antikor
+    
+    # Inyectar las anteriores con formato bruto para revalidación y que nunca se pierdan noticias
+    for ant in anteriores:
+        todos_brutos.append({
+            "id": ant["id"],
+            "plataforma": ant["plataforma"],
+            "canal": ant["canal"],
+            "fecha_dt": ant["fecha_dt"],
+            "titular_raw": ant.get("titular_original", ant["titular"]),
+            "cuerpo_raw": ant["hecho_reportado"],
+            "multimedia": ant.get("multimedia"),
+            "tiene_video": ant.get("tiene_video", False),
+            "enlace": ant["enlace"],
+            "canales_correlacionados": ant.get("canales_correlacionados", [ant["canal"]])
+        })
+
     todos_brutos.sort(key=lambda x: x["fecha_dt"], reverse=True)
 
     pre_unicos = []
@@ -921,7 +941,7 @@ def ejecutar_actualizacion_total():
             continue
 
         urls_vistas.add(u)
-        b["canales_correlacionados"] = [b["canal"]]
+        b.setdefault("canales_correlacionados", [b["canal"]])
         pre_unicos.append(b)
 
     if not pre_unicos:
@@ -1031,13 +1051,13 @@ SECCIONES_INFORME = [
 
 def generar_html_ejecutivo(alertas, solo_48h=False):
     fecha_actual = obtener_fecha_madrid_str()
-    subtitulo_filtro = "INFORME OPERATIVO EXCLUSIVO (ÚLTIMAS 48 HORAS)" if solo_48h else "INFORME GENERAL CONSOLIDADO"
+    subtitulo_filtro = "INFORME EXCLUSIVO (ÚLTIMAS 48 HORAS)" if solo_48h else "INFORME GENERAL CONSOLIDADO"
     
     html = f"""<!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Informe Analizador de Amenazas Híbridas</title>
+    <title>Informe Buscador de Amenazas Híbridas</title>
     <style>
         @page {{ size: A4 portrait; margin: 10mm; }}
         * {{ box-sizing: border-box; }}
@@ -1093,13 +1113,13 @@ def generar_html_ejecutivo(alertas, solo_48h=False):
 </head>
 <body>
     <div class="toolbar">
-        <div><strong>Informe de Inteligencia</strong> &nbsp;|&nbsp; Amenazas Clasificadas</div>
+        <div><strong>Informe de Inteligencia</strong> &nbsp;|&nbsp; Fuentes Verificadas</div>
         <button class="btn-print" onclick="window.print()">🖨️ IMPRIMIR / GUARDAR PDF</button>
     </div>
     <div id="contenedor-reporte">
         <div class="header">
-            <h1>ANALIZADOR DE AMENAZAS HÍBRIDAS</h1>
-            <p>{subtitulo_filtro} | Emisión: {fecha_actual} (Hora Peninsular) | Fuentes Verificadas OSINT</p>
+            <h1>BUSCADOR DE AMENAZAS HÍBRIDAS</h1>
+            <p>{subtitulo_filtro} | Emisión: {fecha_actual} (Hora Peninsular) | Sistema de Vigilancia de Fuentes Abiertas</p>
         </div>"""
 
     for cat_cod, cat_nombre, cat_color in SECCIONES_INFORME:
@@ -1152,14 +1172,14 @@ def toggle_checkbox_callback(item_id):
         st.session_state.seleccionadas_pdf.discard(item_id)
 
 # ==========================================
-# ESTILOS VISUALES Y CABECERA FUTURISTA
+# ESTILOS VISUALES Y CABECERA LIMPIA
 # ==========================================
 st.markdown("""
 <style>
     .main { background-color: #0b0f19; }
     .block-container { padding-top: 1.2rem !important; }
 
-    /* Cabecera Táctica Moderna */
+    /* Cabecera Táctica Sobria */
     .tactical-header {
         background: linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(30, 41, 59, 0.95) 100%);
         border: 1px solid rgba(56, 189, 248, 0.2);
@@ -1169,61 +1189,26 @@ st.markdown("""
         margin-bottom: 16px;
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
-        backdrop-filter: blur(8px);
-    }
-    .header-left {
-        display: flex;
-        align-items: center;
         gap: 18px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
     }
     .header-titles h1 {
         color: #ffffff;
         margin: 0;
         font-size: 24px !important;
         font-weight: 900;
-        letter-spacing: 1px;
+        letter-spacing: 0.8px;
         text-transform: uppercase;
     }
     .header-titles p {
         color: #94a3b8;
         font-size: 13.5px !important;
         margin: 4px 0 0 0;
-        font-family: monospace;
         letter-spacing: 0.3px;
-    }
-    .system-status {
-        background: rgba(16, 185, 129, 0.12);
-        border: 1px solid rgba(16, 185, 129, 0.35);
-        border-radius: 20px;
-        padding: 6px 14px;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        color: #34d399;
-        font-size: 11.5px;
-        font-weight: 800;
-        letter-spacing: 0.8px;
         text-transform: uppercase;
-        font-family: monospace;
-    }
-    .pulse-dot {
-        width: 8px;
-        height: 8px;
-        background-color: #10b981;
-        border-radius: 50%;
-        box-shadow: 0 0 10px #10b981;
-        animation: pulse 1.8s infinite;
-    }
-    @keyframes pulse {
-        0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
-        70% { transform: scale(1.15); box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
-        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
     }
 
-    /* Pestañas estilizadas */
+    /* Pestañas multilínea sin cortes */
     div[data-baseweb="tab-list"] {
         display: flex !important;
         flex-wrap: wrap !important;
@@ -1306,7 +1291,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Logo Táctico Hexagonal con Retícula Cibernética
+# Logo Táctico Hexagonal
 logo_svg = """<svg width="60" height="60" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
     <defs>
         <radialGradient id="hexGrad" cx="50%" cy="50%" r="50%">
@@ -1322,30 +1307,21 @@ logo_svg = """<svg width="60" height="60" viewBox="0 0 100 100" xmlns="http://ww
             <stop offset="100%" style="stop-color:#991b1b;stop-opacity:1" />
         </linearGradient>
     </defs>
-    <!-- Anillo exterior y retícula de radar -->
     <circle cx="50" cy="50" r="46" fill="url(#hexGrad)" stroke="#334155" stroke-width="2" />
     <circle cx="50" cy="50" r="38" fill="none" stroke="#38bdf8" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.6" />
     <circle cx="50" cy="50" r="28" fill="none" stroke="#0ea5e9" stroke-width="1" opacity="0.4" />
     <line x1="50" y1="4" x2="50" y2="96" stroke="#38bdf8" stroke-width="0.8" opacity="0.3" />
     <line x1="4" y1="50" x2="96" y2="50" stroke="#38bdf8" stroke-width="0.8" opacity="0.3" />
-    <!-- Escudo Defensivo OSINT -->
     <path d="M50 16 L74 27 V52 C74 68 50 82 50 82 C50 82 26 68 26 52 V27 Z" fill="#0f172a" stroke="url(#neonCyan)" stroke-width="2.2" />
-    <!-- Rayo de Intervención Rápida -->
     <polygon points="52,26 38,48 48,48 44,70 60,44 50,44" fill="url(#shieldRed)" filter="drop-shadow(0 0 4px rgba(239,68,68,0.7))" />
 </svg>"""
 
 cabecera_html = f"""
 <div class="tactical-header">
-    <div class="header-left">
-        <div>{logo_svg}</div>
-        <div class="header-titles">
-            <h1>ANALIZADOR DE AMENAZAS HÍBRIDAS</h1>
-            <p>SISTEMA OPERATIVO DE VIGILANCIA EN FUENTES ABIERTAS // SECTOR ESPAÑA-GLOBAL</p>
-        </div>
-    </div>
-    <div class="system-status">
-        <div class="pulse-dot"></div>
-        <span>SISTEMA EN LÍNEA</span>
+    <div>{logo_svg}</div>
+    <div class="header-titles">
+        <h1>BUSCADOR DE AMENAZAS HÍBRIDAS</h1>
+        <p>SISTEMA DE VIGILANCIA DE FUENTES ABIERTAS</p>
     </div>
 </div>
 """
@@ -1425,7 +1401,7 @@ with col_btn2:
 
 with col_info:
     if "ultima_actualizacion" in st.session_state:
-        st.markdown(f'<div style="font-size:12.5px;color:#94a3b8;margin-top:6px;">🕒 <strong>Última sincronización:</strong> {st.session_state.ultima_actualizacion} (Madrid)<br>Mostrando <strong>{len(datos_activos)}</strong> alertas filtradas.</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:12.5px;color:#94a3b8;margin-top:6px;">🕒 <strong>Última sincronización:</strong> {st.session_state.ultima_actualizacion} (Madrid)<br>Mostrando <strong>{len(datos_activos)}</strong> alertas consolidadas.</div>', unsafe_allow_html=True)
 
 ids_visibles = [x["id"] for x in datos_activos]
 c_sel1, c_sel2, _ = st.columns([1.2, 1.2, 4.0])
@@ -1518,7 +1494,7 @@ def renderizar_tarjetas(lista_items):
             st.markdown(tarjeta_html, unsafe_allow_html=True)
 
 # ==========================================
-# PESTAÑAS (10 SECCIONES CON BOTONERA ADAPTATIVA)
+# PESTAÑAS (ORDEN OPERATIVO)
 # ==========================================
 if "alertas_monitor" in st.session_state:
     l_esp = [x for x in datos_activos if x.get("categoria") == "ESPANA"]
