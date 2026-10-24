@@ -13,6 +13,8 @@ from email.utils import parsedate_to_datetime
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import time
+import random
 from difflib import SequenceMatcher
 from urllib.parse import urlparse, urlunparse
 import pandas as pd
@@ -29,71 +31,80 @@ st.set_page_config(
 )
 
 # ==========================================
-# BLINDAJE TOTAL ANTI-GITHUB Y PERFIL (CSS + JS)
+# BLINDAJE VISUAL DEFINITIVO (IFRAME + VENTANA PADRE)
 # ==========================================
 st.markdown("""
 <style>
-    /* 1. Ocultar cabecera, menú superior y pie de página nativos */
     #MainMenu, header, footer {
         visibility: hidden !important;
         display: none !important;
         height: 0px !important;
     }
-    
-    /* 2. Ocultar cualquier badge, contenedor de perfil o enlace a GitHub / Streamlit Cloud */
     [data-testid="stToolbar"],
     [data-testid="stDecoration"],
     [data-testid="stStatusWidget"],
     [data-testid="manage-app-button"],
+    button[kind="manage-app"],
+    .manage-app,
+    div[class*="manage-app"],
     .viewerBadge_container__1QSob,
-    .viewerBadge_link__1QSob,
-    .viewerBadge_text__1JaDK,
     div[class*="viewerBadge"],
     div[class*="profileContainer"],
-    div[class*=" profilePreview"],
-    a[href*="github.com"],
-    a[href*="streamlit.io/cloud"] {
+    a[href*="github.com"] {
         visibility: hidden !important;
         display: none !important;
         opacity: 0 !important;
         pointer-events: none !important;
-        width: 0 !important;
-        height: 0 !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Script JS silencioso para destruir del DOM cualquier insignia flotante de perfil en Streamlit Cloud
+# Inyector JavaScript directo al marco padre para suprimir barra de gestión y perfil
 components.html("""
 <script>
-    const cleanProfileBadges = () => {
+    function eliminarElementosGestion() {
         try {
-            const parentDoc = window.parent.document;
-            const selectors = [
-                'a[href*="github.com"]',
-                'div[class*="viewerBadge"]',
-                'div[class*="profileContainer"]',
-                '[data-testid="manage-app-button"]',
-                'footer'
-            ];
-            selectors.forEach(sel => {
-                parentDoc.querySelectorAll(sel).forEach(el => {
-                    // No borrar enlaces dentro de nuestras tarjetas de noticias OSINT
-                    if (!el.closest('.osint-card')) {
-                        el.style.display = 'none';
-                        el.remove();
-                    }
-                });
+            const targets = [window.document, window.parent.document, window.top.document];
+            const css = `
+                [data-testid="manage-app-button"],
+                button[kind="manage-app"],
+                .manage-app,
+                div[class*="manage-app"],
+                div[class*="profileContainer"],
+                div[class*="profilePreview"],
+                div[class*="viewerBadge"],
+                .viewerBadge_container__1QSob,
+                div[class*="stAppViewerAppBottomBar"],
+                div[class*="Toolbar"],
+                header, footer {
+                    display: none !important;
+                    visibility: hidden !important;
+                    opacity: 0 !important;
+                    pointer-events: none !important;
+                    height: 0 !important;
+                    width: 0 !important;
+                }
+            `;
+            targets.forEach(doc => {
+                if (doc && !doc.getElementById('blindaje-estilo-gad')) {
+                    const style = doc.createElement('style');
+                    style.id = 'blindaje-estilo-gad';
+                    style.innerHTML = css;
+                    doc.head.appendChild(style);
+                }
+                if (doc) {
+                    doc.querySelectorAll('[data-testid="manage-app-button"], button[kind="manage-app"], div[class*="manage-app"], div[class*="profileContainer"]').forEach(el => el.remove());
+                }
             });
-        } catch (e) {}
-    };
-    cleanProfileBadges();
-    setInterval(cleanProfileBadges, 1500);
+        } catch(e) {}
+    }
+    eliminarElementosGestion();
+    setInterval(eliminarElementosGestion, 400);
 </script>
 """, height=0, width=0)
 
 # ==========================================
-# CONTROL DE ACCESO CON RECORDATORIO (CLAVE: GAD2026)
+# CONTROL DE ACCESO (CLAVE: GAD2026)
 # ==========================================
 CLAVE_SISTEMA = "GAD2026"
 TOKEN_PERSISTENTE = "gad_auth_ok_2026"
@@ -135,11 +146,11 @@ if not gestionar_acceso():
     st.stop()
 
 # ==========================================
-# SESIÓN HTTP OPTIMIZADA Y THREAD-SAFE
+# SESIÓN HTTP CON REINTENTOS
 # ==========================================
 SESION_HTTP = requests.Session()
-retries = Retry(total=1, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
-adapter = HTTPAdapter(pool_connections=50, pool_maxsize=50, max_retries=retries)
+retries = Retry(total=2, backoff_factor=0.3, status_forcelist=[500, 502, 503, 504])
+adapter = HTTPAdapter(pool_connections=40, pool_maxsize=40, max_retries=retries)
 SESION_HTTP.mount("https://", adapter)
 SESION_HTTP.mount("http://", adapter)
 SESION_HTTP.headers.update({
@@ -151,7 +162,7 @@ CACHE_TITULARES_GLOBAL = {}
 CACHE_LOCK = threading.Lock()
 
 # ==========================================
-# FUNCIONES DE LIMPIEZA Y FECHAS
+# LIMPIEZA DE CADENAS Y TEXTO
 # ==========================================
 def limpiar_html_texto(texto):
     if not texto:
@@ -214,7 +225,7 @@ def es_reciente_48h(fecha_dt):
     return timedelta(seconds=0) <= diferencia <= timedelta(hours=48)
 
 # ==========================================
-# DESCODIFICACIÓN OFFLINE DE GOOGLE NEWS
+# DECODIFICACIÓN OFFLINE DE GOOGLE NEWS
 # ==========================================
 def decodificar_url_google_news_offline(url_rss):
     if not url_rss or "news.google.com" not in url_rss:
@@ -234,7 +245,7 @@ def decodificar_url_google_news_offline(url_rss):
     return url_rss
 
 # ==========================================
-# TRADUCTOR MULTI-HILO CON BLOQUEO SEGURO (THREAD-SAFE)
+# TRADUCTOR ROBUSTO ANTI-BLOQUEO
 # ==========================================
 def traducir_un_titular_individual(titular_orig):
     if not titular_orig:
@@ -254,29 +265,36 @@ def traducir_un_titular_individual(titular_orig):
         medio_suffix = m_medio.group(1)
         texto_a_traducir = t_clean[:m_medio.start()].strip()
 
-    try:
-        url = "https://translate.googleapis.com/translate_a/single"
-        params = {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:350]}
-        r = SESION_HTTP.get(url, params=params, timeout=2.5)
-        if r.status_code == 200:
-            data = r.json()
-            if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
-                partes = [seg[0] for seg in data[0] if isinstance(seg, list) and len(seg) > 0 and seg[0]]
-                trad = limpiar_html_texto("".join(partes))
-                if len(trad) > 3:
-                    resultado = f"{trad}{medio_suffix}" if medio_suffix else trad
-                    with CACHE_LOCK:
-                        CACHE_TITULARES_GLOBAL[t_clean] = resultado
-                    return resultado
-    except Exception:
-        pass
+    # Pequeña pausa estocástica para no activar rate-limit de Google
+    time.sleep(random.uniform(0.04, 0.09))
+
+    for intento in range(2):
+        try:
+            url = "https://translate.googleapis.com/translate_a/single"
+            params = {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:380]}
+            r = SESION_HTTP.get(url, params=params, timeout=3.0)
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
+                    partes = [seg[0] for seg in data[0] if isinstance(seg, list) and len(seg) > 0 and seg[0]]
+                    trad = limpiar_html_texto("".join(partes))
+                    if len(trad) > 3:
+                        res = f"{trad}{medio_suffix}" if medio_suffix else trad
+                        with CACHE_LOCK:
+                            CACHE_TITULARES_GLOBAL[t_clean] = res
+                        return res
+            elif r.status_code == 429:
+                time.sleep(0.3)
+        except Exception:
+            time.sleep(0.2)
 
     with CACHE_LOCK:
         CACHE_TITULARES_GLOBAL[t_clean] = t_clean
     return t_clean
 
 def traducir_lote_titulares(lista_titulares):
-    with ThreadPoolExecutor(max_workers=20) as ex:
+    # Concurrencia balanceada a 5 workers para evitar bloqueos por IP
+    with ThreadPoolExecutor(max_workers=5) as ex:
         resultados = list(ex.map(traducir_un_titular_individual, lista_titulares))
     return resultados
 
@@ -299,7 +317,7 @@ def extraer_resumen_rss(tit_orig, desc_rss):
     return limpio[:1800] if len(limpio) > 25 else limpiar_firma_medio(tit_orig)
 
 # ==========================================
-# DICCIONARIOS Y MATRICES DE AMENAZA
+# MATRICES Y PATRONES DE ANÁLISIS
 # ==========================================
 EMPRESAS_ESTRATEGICAS_ESP = [
     "destinus", "mikhail kokorich", "kokorich", "uav navigation",
@@ -422,7 +440,7 @@ def tiene_vector_amenaza_global(texto):
     return any(v in t_norm for v in vectores_latinos)
 
 # ==========================================
-# ENRUTADORES DE CATEGORÍA
+# CLASIFICADOR TEMÁTICO
 # ==========================================
 def es_empresa_esp(titular, cuerpo):
     t_all = normalizar_texto(desparasitar_nombres_medios(f"{titular} {cuerpo}"))
@@ -805,7 +823,6 @@ def procesar_un_feed_rss(datos_feed):
 
 def barrido_prensa_multilingue():
     fuentes_rss = [
-        # Prensa nacional y fuentes OSINT
         ("https://theobjective.com/feed/", "The Objective (General)"),
         ("https://theobjective.com/espana/feed/", "The Objective (España)"),
         ("https://theobjective.com/internacional/feed/", "The Objective (Internacional)"),
@@ -922,7 +939,7 @@ def ejecutar_actualizacion_total():
         else:
             titular_final = titular_limpio
             
-            # Cascada equilibrada de clasificación
+            # Cascada de clasificación por prioridad
             if es_empresa_esp(titular_limpio, cuerpo_intacto):
                 cat_final = "EMPRESA"
             elif es_detencion(titular_limpio, cuerpo_intacto):
@@ -1127,7 +1144,7 @@ def toggle_checkbox_callback(item_id):
         st.session_state.seleccionadas_pdf.discard(item_id)
 
 # ==========================================
-# ESTILOS VISUALES Y BOTONERA DE PESTAÑAS REDISEÑADA
+# ESTILOS VISUALES Y BOTONERA ADAPTATIVA
 # ==========================================
 st.markdown("""
 <style>
@@ -1149,7 +1166,7 @@ st.markdown("""
     .header-text h1 { color: #ffffff; margin: 0; font-size: 25px !important; font-weight: 900; letter-spacing: 0.5px; text-transform: uppercase; }
     .header-text p { color: #cbd5e1; font-size: 13.5px !important; margin: 3px 0 0 0; }
 
-    /* Contenedor de pestañas flexible: se adapta y permite ver TODAS las pestañas siempre */
+    /* Barra de pestañas flexible multilínea: jamás se cortan las pestañas */
     div[data-baseweb="tab-list"] {
         display: flex !important;
         flex-wrap: wrap !important;
@@ -1200,7 +1217,6 @@ st.markdown("""
         transform: scale(1.02) !important;
     }
 
-    /* Ocultar la barrita inferior por defecto de Streamlit tabs */
     div[data-baseweb="tab-highlight"] {
         display: none !important;
     }
@@ -1404,7 +1420,7 @@ def renderizar_tarjetas(lista_items):
             st.markdown(tarjeta_html, unsafe_allow_html=True)
 
 # ==========================================
-# PESTAÑAS (10 SECCIONES VISIBLES EN CABECERA)
+# PESTAÑAS (ORDEN OPERATIVO EXACTO)
 # ==========================================
 if "alertas_monitor" in st.session_state:
     l_esp = [x for x in datos_activos if x.get("categoria") == "ESPANA"]
