@@ -10,7 +10,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Blindaje visual CSS
+# Blindaje visual CSS: oculta elementos de despliegue sin romper el menú móvil
 st.markdown("""
 <style>
     #MainMenu, footer { visibility: hidden !important; display: none !important; height: 0px !important; }
@@ -273,7 +273,7 @@ def obtener_contexto_fuente(categoria, canal=""):
     return contextos.get(categoria, "Información operativa de fuentes abiertas sobre el conflicto.")
 
 # ==========================================
-# 6. TRADUCCIÓN INDIVIDUAL BAJO DEMANDA
+# 6. TRADUCCIÓN THREAD-SAFE CON PERSISTENCIA
 # ==========================================
 def traducir_texto(texto_orig):
     if not texto_orig: return ""
@@ -291,9 +291,9 @@ def traducir_texto(texto_orig):
         medio_suffix = m_medio.group(1)
         texto_a_traducir = t_clean[:m_medio.start()].strip()
 
-    params = {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:500]}
+    params = {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:450]}
     try:
-        r = SESION_HTTP.get("https://translate.googleapis.com/translate_a/single", params=params, timeout=2.5)
+        r = SESION_HTTP.get("https://translate.googleapis.com/translate_a/single", params=params, timeout=2.2)
         if r.status_code == 200:
             data = r.json()
             if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
@@ -706,33 +706,30 @@ def renderizar_tarjetas(lista_items):
         # Foto lateral
         media_html = ""
         if item.get("multimedia") and es_url_segura(item["multimedia"]):
-            media_html = f"""<div style="flex: 0 0 260px; max-width: 260px; margin-right: 18px;">
-                <img src="{html_module.escape(item['multimedia'])}" style="width: 100%; border-radius: 6px; max-height: 220px; object-fit: cover;" />
-            </div>"""
+            media_html = f'<div style="flex: 0 0 260px; max-width: 260px; margin-right: 18px;"><img src="{html_module.escape(item["multimedia"])}" style="width: 100%; border-radius: 6px; max-height: 220px; object-fit: cover;" /></div>'
 
         # Bloque Reporte / Post
         bloque_reporte = ""
         if cat in ["TELEGRAM", "REDES"]:
-            bloque_reporte = f"""<div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 14px; color: #1e293b; font-size: 13.5px; line-height: 1.55; text-align: justify; margin-bottom: 8px;">
-                <strong>📄 Reporte / Post:</strong><br>{html_module.escape(cuerpo_mostrar)}
-            </div>"""
+            bloque_reporte = f'<div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 14px; color: #1e293b; font-size: 13.5px; line-height: 1.55; text-align: justify; margin-bottom: 8px;"><strong>📄 Reporte / Post:</strong><br>{html_module.escape(cuerpo_mostrar)}</div>'
 
-        html_card = f"""
-        <div style="background:#ffffff; border:1px solid #cbd5e1; border-left:7px solid {b_color}; border-radius:8px; padding:14px 18px; margin-bottom:8px;">
-            <div style="display: flex; flex-wrap: wrap; align-items: flex-start;">
-                {media_html}
-                <div style="flex: 1; min-width: 260px;">
-                    <div style="font-size:11.5px; color:#64748b; margin-bottom:6px;">📅 {fecha_str} | 📢 {html_module.escape(item['canal'])}</div>
-                    <div style="font-size:16.5px; font-weight:800; color:#0f172a; margin-bottom:8px;">{html_module.escape(titular_mostrar)}</div>
-                    {bloque_reporte}
-                    <div style="background:#f0f9ff; border-left:4px solid #0284c7; padding:8px 12px; color:#0c4a6e; font-size:13px; margin-bottom:10px;">
-                        <strong>Contexto de la fuente:</strong> {html_module.escape(item['evaluacion_contexto'])}
-                    </div>
-                    <a href="{enlace_seguro}" target="_blank" rel="noopener noreferrer" style="background:#0f172a; color:#fff; padding:6px 14px; border-radius:4px; font-size:11.5px; font-weight:700; text-decoration:none;">🔗 ABRIR FUENTE ORIGINAL</a>
-                </div>
-            </div>
-        </div>
-        """
+        # Tarjeta HTML en bloque compacto sin espacios al inicio de línea
+        html_card = (
+            f'<div style="background:#ffffff; border:1px solid #cbd5e1; border-left:7px solid {b_color}; border-radius:8px; padding:14px 18px; margin-bottom:8px;">'
+            f'<div style="display: flex; flex-wrap: wrap; align-items: flex-start;">'
+            f'{media_html}'
+            f'<div style="flex: 1; min-width: 260px;">'
+            f'<div style="font-size:11.5px; color:#64748b; margin-bottom:6px;">📅 {fecha_str} | 📢 {html_module.escape(item["canal"])}</div>'
+            f'<div style="font-size:16.5px; font-weight:800; color:#0f172a; margin-bottom:8px;">{html_module.escape(titular_mostrar)}</div>'
+            f'{bloque_reporte}'
+            f'<div style="background:#f0f9ff; border-left:4px solid #0284c7; padding:8px 12px; color:#0c4a6e; font-size:13px; margin-bottom:10px;">'
+            f'<strong>Contexto de la fuente:</strong> {html_module.escape(item["evaluacion_contexto"])}'
+            f'</div>'
+            f'<a href="{enlace_seguro}" target="_blank" rel="noopener noreferrer" style="background:#0f172a; color:#fff; padding:6px 14px; border-radius:4px; font-size:11.5px; font-weight:700; text-decoration:none;">🔗 ABRIR FUENTE ORIGINAL</a>'
+            f'</div>'
+            f'</div>'
+            f'</div>'
+        )
 
         col_chk, col_content = st.columns([0.04, 0.96])
         with col_chk:
@@ -740,7 +737,7 @@ def renderizar_tarjetas(lista_items):
         with col_content:
             st.markdown(html_card, unsafe_allow_html=True)
             
-            # Botón de traducción bajo demanda para esta alerta específica
+            # Botón de traducción individual
             c_tr, c_cp = st.columns([0.22, 0.78])
             with c_tr:
                 if not esta_traducido:
@@ -753,7 +750,7 @@ def renderizar_tarjetas(lista_items):
                 else:
                     st.caption("✅ Traducida al español")
 
-            # Desplegable para copiar alerta
+            # Formato de copia
             with st.expander("📋 Formato de alerta para copiar"):
                 texto_copia = f"🚨 ALERTA OSINT | {cat}\nTitular: {titular_mostrar}\nReporte: {cuerpo_mostrar[:300]}...\nFuente: {item['canal']} | Fecha: {fecha_str}\nEnlace: {item.get('enlace','')}"
                 st.code(texto_copia, language="markdown")
