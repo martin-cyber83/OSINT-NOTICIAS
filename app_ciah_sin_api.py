@@ -43,15 +43,22 @@ def obtener_fecha_madrid_str(dt=None):
     return dt_madrid.strftime("%d/%m/%Y %H:%M:%S")
 
 # ==========================================
-# BLINDAJE VISUAL (ANTI-GITHUB / PERFIL / MANAGE APP)
+# BLINDAJE VISUAL DEFINITIVO (ANTI-GITHUB / MANAGE APP / ANCLAS)
 # ==========================================
 st.markdown("""
 <style>
+    /* Ocultar barra superior, menú y pie de página */
     #MainMenu, header, footer {
         visibility: hidden !important;
         display: none !important;
         height: 0px !important;
     }
+    /* Ocultar iconos de ancla/enlace en cabeceras de Streamlit */
+    a.header-anchor, a[data-testid="header-anchor"] {
+        display: none !important;
+        visibility: hidden !important;
+    }
+    /* Ocultar barras y herramientas de Streamlit Cloud */
     [data-testid="stToolbar"],
     [data-testid="stDecoration"],
     [data-testid="stStatusWidget"],
@@ -87,6 +94,7 @@ components.html("""
                 .viewerBadge_container__1QSob,
                 div[class*="stAppViewerAppBottomBar"],
                 div[class*="Toolbar"],
+                a.header-anchor,
                 header, footer {
                     display: none !important;
                     visibility: hidden !important;
@@ -112,7 +120,6 @@ components.html("""
     eliminarElementosGestion();
     setInterval(eliminarElementosGestion, 400);
 
-    // Función universal para copiar al portapapeles sin recargar
     window.copiarAlerta = function(textoBase64) {
         try {
             const texto = decodeURIComponent(escape(window.atob(textoBase64)));
@@ -127,12 +134,69 @@ components.html("""
                 document.body.removeChild(ta);
                 alert("📋 Alerta copiada.");
             });
-        } catch (err) {
-            console.error("Error copiando alerta: ", err);
-        }
+        } catch (err) {}
     };
 </script>
 """, height=0, width=0)
+
+# ==========================================
+# CONSTANTES Y LISTAS (DEFINICIÓN INICIAL SEGURA)
+# ==========================================
+CANALES_DESINFORMACION_ESP = {
+    "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu", "ASupersharij"
+}
+
+EMPRESAS_ESTRATEGICAS_ESP = [
+    "destinus", "mikhail kokorich", "kokorich", "uav navigation",
+    "grupo oesia", "oesia", "tecnobit", "indra", "navantia", "escribano",
+    "em&e", "sener", "arquimea", "santa barbara sistemas", "santa barbara",
+    "gdels", "expal", "rheinmetall expal", "instalaza", "sapla", "urovesa",
+    "itp aero", "airbus espana", "airbus getafe", "hisdesat", "hispasat",
+    "sateliot", "pld space", "amadeus", "aena", "enaire", "renfe", "adif",
+    "telefonica", "iberdrola", "repsol", "naturgy", "redeia", "red electrica",
+    "enagas", "talgo"
+]
+
+PATRON_RUSIA_ESTRICTO = re.compile(
+    r'\b('
+    r'rusia|ruso|rusa|rusos|rusas|moscu|kremlin|putin|mod rf|fuerzas armadas rusas|'
+    r'russia|russian|russians|moscow|russie|russe|russland|russisch|'
+    r'gru|fsb|svr|apt28|apt29|fancy bear|cozy bear|sandworm|noname057|killnet|turla|gamaredon|cyberarmyofrussia|garantex|wagner|'
+    r'bielorrusia|belarus|kaliningrado|kaliningrad|lukashenko|'
+    r'ucrania|ucraniano|ucraniana|ucranianos|ukraine|ukrainian|zelensky|zelenski|zsu|vsu|sbu|gur|'
+    r'kursk|belgorod|donbas|donbass|crimea|zaporiyia|zaporizhzhia|kherson|donetsk|lugansk|luhansk|jarkov|kharkiv|shariy|sharij|zvinchuk|rybar|'
+    r'chechenia|kadyrov|transnistria|moldavia|georgia|abjasia|osetia|kazajistan|uzbekistan|tayikistan'
+    r')\b', re.IGNORECASE
+)
+
+RAICES_CIRILICO = [
+    "росси", "рф", "москв", "кремл", "путин", "гру", "фсб", "свр",
+    "украин", "киев", "київ", "зсу", "всу", "сбу", "гур", "донбасс",
+    "крым", "беларус", "вагнер", "шахед", "геран", "искандер", "шарий", "рыбарь", "звинчук"
+]
+
+PATRON_CHINA_ESTRICTO = re.compile(
+    r'\b('
+    r'china|chino|chinos|chinas|pekin|beijing|xi jinping|partido comunista chino|pcc|'
+    r'pla|ejercito popular de liberacion|taiwan|taipei|canton|hong kong|'
+    r'apt41|volt typhoon|flax typhoon|mustang panda|salt typhoon|mss|ministerio de seguridad del estado|'
+    r'ciberespionaje chino|injerencia china|injerencia de pekin|espionaje chino|comisarias chinas|estaciones de policia chinas'
+    r')\b', re.IGNORECASE
+)
+
+RAICES_CHINO = ["中国", "北京", "习近平", "解放军", "台湾", "华为", "国安部", "间谍"]
+RAICES_ARABE = ["روسيا", "أوكرانيا", "الصين", "بوتين", "تجسس", "طائرات مسيرة"]
+RAICES_POLACO = ["rosja", "rosyjski", "ukraina", "putin", "sabotaż", "szpiegostwo", "dywersja", "abw", "służby"]
+
+PATRON_PAISES_AJENOS = re.compile(
+    r'\b('
+    r'cuba|cubano|cubana|cubanos|la habana|castro|diaz-canel|'
+    r'venezuela|venezolano|venezolana|maduro|caracas|'
+    r'nicaragua|ortega|managua|colombia|petro|bogota|'
+    r'gaza|hamas|hezbollah|hezbola|netanyahu|tel aviv|cisjordania|palestina|palestino|israel|israeli|'
+    r'yemen|huti|huties|iran|irani|teheran|siria|damasco'
+    r')\b', re.IGNORECASE
+)
 
 # ==========================================
 # CONTROL DE ACCESO (CLAVE: GAD2026)
@@ -193,7 +257,7 @@ CACHE_TITULARES_GLOBAL = {}
 CACHE_LOCK = threading.Lock()
 
 # ==========================================
-# LIMPIEZA DE CADENAS Y FECHAS
+# LIMPIEZA DE CADENAS Y TEXTO
 # ==========================================
 def limpiar_html_texto(texto):
     if not texto:
@@ -247,29 +311,23 @@ def cumple_busqueda_booleana(texto_evaluar, query_str):
     t_norm = normalizar_texto(texto_evaluar)
     q_raw = query_str.strip()
 
-    # Si contiene operadores booleanos explícitos
     if re.search(r'\b(AND|OR|NOT)\b', q_raw) or "-" in q_raw:
-        # Extraer cláusulas NOT
         partes_not = re.findall(r'(?:NOT\s+|-)(\w+)', q_raw, flags=re.IGNORECASE)
         for term_not in partes_not:
             if normalizar_texto(term_not) in t_norm:
                 return False
         
-        # Limpiar cláusulas NOT del resto de la consulta
         q_clean = re.sub(r'(?:NOT\s+|-)\w+', '', q_raw, flags=re.IGNORECASE).strip()
         if not q_clean:
             return True
 
-        # Procesar bloques OR
         bloques_or = [b.strip() for b in re.split(r'\bOR\b', q_clean, flags=re.IGNORECASE) if b.strip()]
         for bloque in bloques_or:
-            # Dentro de cada bloque OR, todos los términos con AND deben coincidir
             terminos_and = [t.strip() for t in re.split(r'\bAND\b|\s+', bloque, flags=re.IGNORECASE) if t.strip()]
             if all(normalizar_texto(t) in t_norm for t in terminos_and):
                 return True
         return False
 
-    # Búsqueda tradicional por palabras (todas deben estar presentes)
     palabras = [normalizar_texto(p) for p in q_raw.split() if p]
     return all(p in t_norm for p in palabras)
 
@@ -280,7 +338,6 @@ def extraer_entidades_clave(texto_completo):
     t_norm = normalizar_texto(texto_completo)
     etiquetas = []
 
-    # Actores y Grupos APT
     actores = {
         "GRU": r'\bgru\b', "FSB": r'\bfsb\b', "SVR": r'\bsvr\b',
         "APT41": r'\bapt41\b', "Volt Typhoon": r'\bvolt typhoon\b',
@@ -292,9 +349,8 @@ def extraer_entidades_clave(texto_completo):
     }
     for nombre, patron in actores.items():
         if re.search(patron, t_norm):
-            etiquetas.append((nombre, "#3b82f6")) # Azul
+            etiquetas.append((nombre, "#2563eb"))
 
-    # Vectores de Amenaza
     vectores = {
         "Sabotaje": r'\b(sabotaj|cable submarino|red ferroviaria|incendio provocado|arson)\b',
         "Ciberataque": r'\b(ciberataque|ransomware|ddos|malware|infiltracion cibernetica)\b',
@@ -306,16 +362,15 @@ def extraer_entidades_clave(texto_completo):
     }
     for nombre, patron in vectores.items():
         if re.search(patron, t_norm):
-            etiquetas.append((nombre, "#ef4444")) # Rojo
+            etiquetas.append((nombre, "#dc2626"))
 
-    # Entidades y Empresas de Defensa
     empresas = {
         "Destinus": r'\bdestinus\b', "Indra": r'\bindra\b', "Oesía / Tecnobit": r'\b(oesia|tecnobit)\b',
         "Navantia": r'\bnavantia\b', "Escribano": r'\bescribano\b', "GDELS / Santa Bárbara": r'\b(gdels|santa barbara)\b'
     }
     for nombre, patron in empresas.items():
         if re.search(patron, t_norm):
-            etiquetas.append((nombre, "#10b981")) # Verde
+            etiquetas.append((nombre, "#059669"))
 
     return etiquetas[:5]
 
@@ -410,49 +465,8 @@ def extraer_resumen_rss(tit_orig, desc_rss):
     return limpio[:1800] if len(limpio) > 25 else limpiar_firma_medio(tit_orig)
 
 # ==========================================
-# MATRICES Y PATRONES DE ANÁLISIS
+# FILTRADO Y CATEGORIZACIÓN
 # ==========================================
-PATRON_RUSIA_ESTRICTO = re.compile(
-    r'\b('
-    r'rusia|ruso|rusa|rusos|rusas|moscu|kremlin|putin|mod rf|fuerzas armadas rusas|'
-    r'russia|russian|russians|moscow|russie|russe|russland|russisch|'
-    r'gru|fsb|svr|apt28|apt29|fancy bear|cozy bear|sandworm|noname057|killnet|turla|gamaredon|cyberarmyofrussia|garantex|wagner|'
-    r'bielorrusia|belarus|kaliningrado|kaliningrad|lukashenko|'
-    r'ucrania|ucraniano|ucraniana|ucranianos|ukraine|ukrainian|zelensky|zelenski|zsu|vsu|sbu|gur|'
-    r'kursk|belgorod|donbas|donbass|crimea|zaporiyia|zaporizhzhia|kherson|donetsk|lugansk|luhansk|jarkov|kharkiv|shariy|sharij|zvinchuk|rybar|'
-    r'chechenia|kadyrov|transnistria|moldavia|georgia|abjasia|osetia|kazajistan|uzbekistan|tayikistan'
-    r')\b', re.IGNORECASE
-)
-
-RAICES_CIRILICO = [
-    "росси", "рф", "москв", "кремл", "путин", "гру", "фсб", "свр",
-    "украин", "киев", "київ", "зсу", "всу", "сбу", "гур", "донбасс",
-    "крым", "беларус", "вагнер", "шахед", "геран", "искандер", "шарий", "рыбарь", "звинчук"
-]
-
-PATRON_CHINA_ESTRICTO = re.compile(
-    r'\b('
-    r'china|chino|chinos|chinas|pekin|beijing|xi jinping|partido comunista chino|pcc|'
-    r'pla|ejercito popular de liberacion|taiwan|taipei|canton|hong kong|'
-    r'apt41|volt typhoon|flax typhoon|mustang panda|salt typhoon|mss|ministerio de seguridad del estado|'
-    r'ciberespionaje chino|injerencia china|injerencia de pekin|espionaje chino|comisarias chinas|estaciones de policia chinas'
-    r')\b', re.IGNORECASE
-)
-
-RAICES_CHINO = ["中国", "北京", "习近平", "解放军", "台湾", "华为", "国安部", "间谍"]
-RAICES_ARABE = ["روسيا", "أوكرانيا", "الصين", "بوتين", "تجسس", "طائرات مسيرة"]
-RAICES_POLACO = ["rosja", "rosyjski", "ukraina", "putin", "sabotaż", "szpiegostwo", "dywersja", "abw", "służby"]
-
-PATRON_PAISES_AJENOS = re.compile(
-    r'\b('
-    r'cuba|cubano|cubana|cubanos|la habana|castro|diaz-canel|'
-    r'venezuela|venezolano|venezolana|maduro|caracas|'
-    r'nicaragua|ortega|managua|colombia|petro|bogota|'
-    r'gaza|hamas|hezbollah|hezbola|netanyahu|tel aviv|cisjordania|palestina|palestino|israel|israeli|'
-    r'yemen|huti|huties|iran|irani|teheran|siria|damasco'
-    r')\b', re.IGNORECASE
-)
-
 def es_publicidad_o_spam(texto):
     t = normalizar_texto(texto)
     spam = ["master profesional", "lisa institute", "udima", "beca", "matriculate", "curso online", "descuento", "sorteo", "casino", "apuestas", "tarot", "horoscopo", "oferta de empleo"]
@@ -517,9 +531,6 @@ def tiene_vector_amenaza_global(texto):
     ]
     return any(v in t_norm for v in vectores_latinos)
 
-# ==========================================
-# CLASIFICADOR TEMÁTICO
-# ==========================================
 def es_empresa_esp(titular, cuerpo):
     t_all = normalizar_texto(desparasitar_nombres_medios(f"{titular} {cuerpo}"))
     menciona_empresa_concreta = any(re.search(r'\b' + re.escape(emp) + r'\b', t_all) for emp in EMPRESAS_ESTRATEGICAS_ESP)
@@ -947,7 +958,7 @@ def barrido_prensa_multilingue():
     return todas
 
 # ==========================================
-# ACTUALIZACIÓN CENTRAL CON AGRUPACIÓN Y PERSISTENCIA
+# ACTUALIZACIÓN CENTRAL
 # ==========================================
 def son_mismo_evento(tit1, tit2):
     t1 = re.sub(r'^(última hora|exclusiva|urgente|video)[:\-]?\s*', '', normalizar_texto(limpiar_firma_medio(re.sub(r'\[.*?\]', '', tit1))))
@@ -1002,7 +1013,6 @@ def ejecutar_actualizacion_total(activar_traduccion=True):
             if b["canal"] not in coincidente.get("canales_correlacionados", []):
                 coincidente.setdefault("canales_correlacionados", []).append(b["canal"])
             
-            # Guardamos enlace y fuente secundaria para desplegable
             fuentes_sec = coincidente.setdefault("fuentes_coincidentes", [])
             if not any(f["enlace"] == b["enlace"] for f in fuentes_sec) and b["enlace"] != coincidente["enlace"]:
                 fuentes_sec.append({"canal": b["canal"], "enlace": b["enlace"], "titular": b["titular_raw"]})
@@ -1057,7 +1067,6 @@ def ejecutar_actualizacion_total(activar_traduccion=True):
             else:
                 cat_final = "GLOBAL"
 
-        # Extracción automática de etiquetas tácticas (NER Ligera)
         etiquetas_ner = extraer_entidades_clave(f"{titular_final} {cuerpo_intacto}")
 
         nueva_alerta = {
@@ -1302,7 +1311,7 @@ st.markdown("""
         margin-bottom: 16px;
         display: flex;
         align-items: center;
-        gap: 18px;
+        gap: 20px;
         box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
     }
     .header-titles h1 {
@@ -1409,28 +1418,40 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-logo_svg = """<svg width="60" height="60" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+# ==========================================
+# LOGO TÁCTICO VECTORIAL DE ALTA DEFINICIÓN
+# ==========================================
+logo_svg = """<svg width="68" height="68" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
     <defs>
-        <radialGradient id="hexGrad" cx="50%" cy="50%" r="50%">
-            <stop offset="0%" style="stop-color:#1e293b;stop-opacity:1" />
-            <stop offset="100%" style="stop-color:#020617;stop-opacity:1" />
+        <radialGradient id="cyberBg" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" stop-color="#1e293b" />
+            <stop offset="100%" stop-color="#020617" />
         </radialGradient>
-        <linearGradient id="neonCyan" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" style="stop-color:#38bdf8;stop-opacity:1" />
-            <stop offset="100%" style="stop-color:#0284c7;stop-opacity:1" />
+        <linearGradient id="neonGlow" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#38bdf8" />
+            <stop offset="50%" stop-color="#0284c7" />
+            <stop offset="100%" stop-color="#0369a1" />
         </linearGradient>
-        <linearGradient id="shieldRed" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" style="stop-color:#ef4444;stop-opacity:1" />
-            <stop offset="100%" style="stop-color:#991b1b;stop-opacity:1" />
+        <linearGradient id="coreBolt" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#f87171" />
+            <stop offset="100%" stop-color="#dc2626" />
         </linearGradient>
+        <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="2.5" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+        </filter>
     </defs>
-    <circle cx="50" cy="50" r="46" fill="url(#hexGrad)" stroke="#334155" stroke-width="2" />
-    <circle cx="50" cy="50" r="38" fill="none" stroke="#38bdf8" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.6" />
-    <circle cx="50" cy="50" r="28" fill="none" stroke="#0ea5e9" stroke-width="1" opacity="0.4" />
-    <line x1="50" y1="4" x2="50" y2="96" stroke="#38bdf8" stroke-width="0.8" opacity="0.3" />
-    <line x1="4" y1="50" x2="96" y2="50" stroke="#38bdf8" stroke-width="0.8" opacity="0.3" />
-    <path d="M50 16 L74 27 V52 C74 68 50 82 50 82 C50 82 26 68 26 52 V27 Z" fill="#0f172a" stroke="url(#neonCyan)" stroke-width="2.2" />
-    <polygon points="52,26 38,48 48,48 44,70 60,44 50,44" fill="url(#shieldRed)" filter="drop-shadow(0 0 4px rgba(239,68,68,0.7))" />
+    <!-- Base Circular Táctica -->
+    <circle cx="50" cy="50" r="47" fill="url(#cyberBg)" stroke="#334155" stroke-width="2" />
+    <circle cx="50" cy="50" r="40" stroke="#38bdf8" stroke-width="1.2" stroke-dasharray="3 3" opacity="0.6" />
+    <circle cx="50" cy="50" r="30" stroke="#0ea5e9" stroke-width="0.8" opacity="0.4" />
+    <!-- Retícula Polar -->
+    <line x1="50" y1="3" x2="50" y2="97" stroke="#38bdf8" stroke-width="0.8" opacity="0.35" />
+    <line x1="3" y1="50" x2="97" y2="50" stroke="#38bdf8" stroke-width="0.8" opacity="0.35" />
+    <!-- Escudo Defensivo Angulado -->
+    <path d="M50 14 L75 25 V52 C75 69 50 84 50 84 C50 84 25 69 25 52 V25 Z" fill="#0f172a" stroke="url(#neonGlow)" stroke-width="2.5" filter="url(#glow)" />
+    <!-- Rayo de Intervención Rápida -->
+    <polygon points="53,24 37,48 48,48 43,72 61,44 51,44" fill="url(#coreBolt)" filter="url(#glow)" />
 </svg>"""
 
 cabecera_html = f"""
@@ -1580,7 +1601,6 @@ def renderizar_tarjetas(lista_items):
             "DETENCION": "#be123c", "CHINA": "#1e3a8a", "TELEGRAM": "#0284c7", "REDES": "#059669"
         }.get(cat, "#0f172a")
 
-        # Badges temporales y de difusión
         badges = ""
         if (ahora_utc - item.get("fecha_dt").astimezone(timezone.utc)) <= timedelta(hours=24):
             badges += '<span class="badge-item" style="background:#fee2e2;color:#991b1b;border:1px solid #f87171;">⚡ ÚLTIMAS 24H</span>'
@@ -1596,7 +1616,6 @@ def renderizar_tarjetas(lista_items):
             sep = 'margin-left:6px;' if badges else ''
             badges += f'<span class="badge-item" style="background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;{sep}">🔄 DIFUNDIDO EN {len(correlacionados)} MEDIOS</span>'
 
-        # Píldoras de Entidades Clave (NER)
         pildoras_ner = ""
         for nombre_ent, color_ent in item.get("etiquetas_ner", []):
             pildoras_ner += f'<span class="ner-pill" style="background-color:{color_ent};">{html_module.escape(nombre_ent)}</span>'
@@ -1617,7 +1636,6 @@ def renderizar_tarjetas(lista_items):
 
         badge_header = f'<div style="margin-bottom:8px;">{badges}<span style="font-size:12px;color:#64748b;margin-left:8px;">📅 {fecha_str} | 📢 {canal_safe}</span></div>' if badges else f'<div style="margin-bottom:8px;"><span style="font-size:12px;color:#64748b;">📅 {fecha_str} | 📢 {canal_safe}</span></div>'
 
-        # Preparar texto para copia táctica (Base64 para inyección JS segura)
         texto_copia = f"🚨 ALERTA OSINT | {cat}\nTitular: {item.get('titular', '')}\nFuente: {canal_nombre} | Fecha: {fecha_str} (Madrid)\nEnlace: {enlace}"
         b64_copia = base64.b64encode(texto_copia.encode('utf-8')).decode('utf-8')
 
@@ -1654,7 +1672,6 @@ def renderizar_tarjetas(lista_items):
         with col_card:
             st.markdown(tarjeta_html, unsafe_allow_html=True)
             
-            # Desplegable de desduplicación si hay más medios cubriendo la misma noticia
             fuentes_sec = item.get("fuentes_coincidentes", [])
             if fuentes_sec:
                 with st.expander(f"📑 Ver {len(fuentes_sec)} cobertura(s) adicional(es) de este mismo evento"):
