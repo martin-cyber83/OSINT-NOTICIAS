@@ -47,7 +47,7 @@ def generar_id_estable(prefijo, texto):
     return f"{prefijo}-{digest}"
 
 # ==========================================
-# BLINDAJE VISUAL DEFINITIVO
+# BLINDAJE VISUAL DEFINITIVO (CSS)
 # ==========================================
 st.markdown("""
 <style>
@@ -203,7 +203,7 @@ def gestionar_acceso():
     st.markdown("""
         <div style="max-width: 480px; margin: 50px auto 20px auto; padding: 26px; background: #0f172a; border-radius: 12px; border-left: 6px solid #dc2626; color: white; box-shadow: 0 16px 36px rgba(0,0,0,0.6);">
             <h2 style="margin-top: 0; color: #ffffff; font-size: 20px; letter-spacing: 0.5px;">🔒 Acceso Restringido // Monitor OSINT</h2>
-            <p style="color: #94a3b8; font-size: 13px;">Sistema de Vigilancia de Amenazas Híbridas e Injerencia. Introduzca la credencial autorizada para continuar.</p>
+            <p style="color: #94a3b8; font-size: 13px;">Sistema de Vigilancia de Amenazas Híbridas e Injerencia. Introduzca la credencial para autorizar la sesión.</p>
         </div>
     """, unsafe_allow_html=True)
 
@@ -268,7 +268,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# SESIÓN HTTP ROBUSTA
+# SESIÓN HTTP
 # ==========================================
 SESION_HTTP = requests.Session()
 retries = Retry(total=2, backoff_factor=0.2, status_forcelist=[500, 502, 503, 504])
@@ -284,7 +284,7 @@ CACHE_TITULARES_GLOBAL = {}
 CACHE_LOCK = threading.Lock()
 
 # ==========================================
-# DICCIONARIOS Y EXPRESIONES REGULARES
+# CONSTANTES Y LISTAS DE INTELIGENCIA
 # ==========================================
 CANALES_DESINFORMACION_ESP = {
     "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu", "ASupersharij"
@@ -378,9 +378,6 @@ def es_url_segura(url):
     u = str(url).strip()
     return u.startswith("http://") or u.startswith("https://")
 
-# ==========================================
-# FILTRADO INTELIGENTE
-# ==========================================
 def es_publicidad_o_spam(texto):
     t = normalizar_texto(texto)
     spam = ["master profesional", "lisa institute", "udima", "beca", "matriculate", "curso online", "descuento", "sorteo", "casino", "apuestas", "horoscopo", "oferta de empleo"]
@@ -392,7 +389,6 @@ def cumple_criterio_inteligencia(texto):
     t_raw = str(texto).lower()
     t_norm = normalizar_texto(texto)
 
-    # Coincidencia con actores clave
     actor_ok = (
         bool(PATRON_RUSIA.search(t_norm)) or
         bool(PATRON_CHINA.search(t_norm)) or
@@ -403,7 +399,6 @@ def cumple_criterio_inteligencia(texto):
         any(emp in t_norm for emp in EMPRESAS_ESTRATEGICAS_ESP)
     )
 
-    # Coincidencia con vectores hostiles o situación operativa
     vector_ok = bool(PATRON_VECTORES.search(t_norm)) or any(c in t_raw for c in ["диверс", "шпион", "кибер", "саботаж", "санкц", "арест", "казн", "поджог", "теракт", "убийств"])
 
     return actor_ok and vector_ok
@@ -664,7 +659,7 @@ def raspar_youtube_canal(canal_id, etiqueta):
     return items
 
 # ==========================================
-# ACTUALIZACIÓN CENTRAL
+# CATEGORIZACIÓN Y ACTUALIZACIÓN
 # ==========================================
 def son_mismo_evento(tit1, tit2):
     t1 = re.sub(r'^(última hora|exclusiva|urgente|video)[:\-]?\s*', '', normalizar_texto(limpiar_firma_medio(tit1)))
@@ -809,7 +804,7 @@ def ejecutar_actualizacion_total(activar_traduccion=True):
         st.session_state[f"sel_{a['id']}"] = True
 
 # ==========================================
-# EXPORTACIÓN E INFORMES
+# EXPORTACIÓN E INFORMES (WORD/MD Y HTML/PDF)
 # ==========================================
 def exportar_alertas_csv(alertas):
     if not alertas:
@@ -829,6 +824,42 @@ def exportar_alertas_csv(alertas):
     df = pd.DataFrame(filas)
     return df.to_csv(index=False).encode('utf-8-sig')
 
+def generar_informe_markdown(alertas):
+    fecha_actual = obtener_fecha_madrid_str()
+    md = f"# INFORME DE INTELIGENCIA // BUSCADOR DE AMENAZAS HÍBRIDAS\n"
+    md += f"**Fecha de Emisión:** {fecha_actual} (Hora Peninsular)\n"
+    md += f"**Total de Alertas Consolidadas:** {len(alertas)}\n\n---\n\n"
+    
+    secciones_nombres = {
+        "ESPANA": "🇪🇸 ESPAÑA E INFRAESTRUCTURAS CRÍTICAS",
+        "EMPRESA": "🏢 EMPRESAS ESTRATÉGICAS Y DEFENSA",
+        "GLOBAL": "📰 AMENAZAS GLOBALES (RUSIA/UCRANIA)",
+        "CRIMENES": "⚖️ CRÍMENES DE GUERRA Y TERRORISMO",
+        "CRIPTO": "🟣 FININT Y CRIPTOACTIVOS",
+        "SANCIONES": "📦 SANCIONES Y FLOTA FANTASMA",
+        "DETENCION": "🛑 DETENCIONES Y CONTRAESPIONAJE",
+        "CHINA": "🇨🇳 CHINA Y OPERACIONES DE INJERENCIA",
+        "TELEGRAM": "✈️ CANALES TÁCTICOS TELEGRAM",
+        "REDES": "🌐 REDES SOCIALES Y MONITORIZACIÓN"
+    }
+
+    for cat_cod, cat_nombre in secciones_nombres.items():
+        items_cat = [a for a in alertas if a.get("categoria") == cat_cod]
+        if not items_cat:
+            continue
+        md += f"## {cat_nombre} ({len(items_cat)})\n\n"
+        for a in items_cat:
+            fecha_str = obtener_fecha_madrid_str(a["fecha_dt"])
+            md += f"### {a['titular']}\n"
+            md += f"- **Fecha:** {fecha_str} | **Fuente:** {a['canal']}\n"
+            if a.get("etiquetas_ner"):
+                md += f"- **Entidades:** {', '.join([e[0] for e in a['etiquetas_ner']])}\n"
+            md += f"- **Reporte:** {a['hecho_reportado'][:400]}...\n"
+            md += f"- **Evaluación:** {a['evaluacion_contexto']}\n"
+            md += f"- **Enlace Fuente:** [Abrir Fuente Externa]({a['enlace']})\n\n"
+        md += "---\n\n"
+    return md.encode('utf-8')
+
 def generar_html_ejecutivo(alertas, ventana_str="GENERAL"):
     fecha_actual = obtener_fecha_madrid_str()
     html = f"""<!DOCTYPE html>
@@ -847,13 +878,12 @@ def generar_html_ejecutivo(alertas, ventana_str="GENERAL"):
     return html
 
 # ==========================================
-# GESTIÓN DE ACCIONES Y FILTROS
+# INICIALIZACIÓN DE DATOS
 # ==========================================
 if "alertas_monitor" not in st.session_state:
     st.session_state.alertas_monitor = []
     st.session_state.seleccionadas_pdf = set()
 
-# Si está vacío en el primer inicio, sincroniza
 if not st.session_state.alertas_monitor and "primera_carga" not in st.session_state:
     st.session_state.primera_carga = True
     with st.spinner("Sincronizando fuentes OSINT..."):
@@ -862,21 +892,28 @@ if not st.session_state.alertas_monitor and "primera_carga" not in st.session_st
 
 alertas_totales = st.session_state.get("alertas_monitor", [])
 
-# Barra lateral
+# ==========================================
+# BARRA LATERAL (FILTROS)
+# ==========================================
 with st.sidebar:
     st.subheader("🔍 Filtros de Búsqueda")
     busqueda_txt = st.text_input("Búsqueda por palabras:", placeholder="Ej: sabotaje, Destinus, drones...")
-    rango_tiempo = st.selectbox("📅 Ventana Temporal:", ["Últimas 24 Horas", "Últimas 48 Horas", "Última Semana", "Todo el Histórico"], index=3)
+    rango_tiempo = st.selectbox(
+        "📅 Ventana Temporal de Vigilancia:",
+        ["Últimas 24 Horas", "Últimas 48 Horas", "Última Semana", "Todo el Histórico"],
+        index=3
+    )
     canales_disponibles = sorted(list({a["canal"] for a in alertas_totales}))
     canales_sel = st.multiselect("Filtrar por Canal / Medio:", canales_disponibles, default=[])
     categorias_disponibles = ["ESPANA", "EMPRESA", "GLOBAL", "CRIMENES", "CRIPTO", "SANCIONES", "DETENCION", "CHINA", "TELEGRAM", "REDES"]
     cat_sel = st.multiselect("Filtrar por Categoría:", categorias_disponibles, default=[])
     
     st.write("---")
+    st.subheader("📊 Exportación Global")
     csv_bytes = exportar_alertas_csv(alertas_totales)
-    st.download_button("📊 DESCARGAR CSV", data=csv_bytes, file_name=f"alertas_{datetime.now(ZONA_MADRID).strftime('%Y%m%d_%H%M')}.csv", mime="text/csv", use_container_width=True)
+    st.download_button("📊 BASE DE DATOS COMPLETA (CSV)", data=csv_bytes, file_name=f"alertas_{datetime.now(ZONA_MADRID).strftime('%Y%m%d_%H%M')}.csv", mime="text/csv", use_container_width=True)
 
-# Filtro temporal estricto (sin aceptar fechas futuras)
+# Filtrado temporal
 ahora_utc = datetime.now(timezone.utc)
 def en_rango_horas(dt_item, horas):
     diff = ahora_utc - dt_item.astimezone(timezone.utc)
@@ -903,8 +940,10 @@ if canales_sel:
 if cat_sel:
     datos_filtrados = [x for x in datos_filtrados if x["categoria"] in cat_sel]
 
-# Botones de control
-col_btn1, col_trad, col_btn2, col_info = st.columns([1.2, 1.0, 1.4, 2.0])
+# ==========================================
+# BOTONERA SUPERIOR
+# ==========================================
+col_btn1, col_trad, col_btn_pdf, col_btn_md, col_info = st.columns([1.1, 1.0, 1.2, 1.2, 1.6])
 
 with col_btn1:
     if st.button("🔄 ACTUALIZAR FUENTES", type="primary", use_container_width=True):
@@ -917,18 +956,27 @@ with col_trad:
 
 alertas_para_informe = [x for x in datos_filtrados if x.get("id") in st.session_state.seleccionadas_pdf]
 
-with col_btn2:
+with col_btn_pdf:
     st.download_button(
-        f"📥 INFORME ({len(alertas_para_informe)})",
+        f"📥 INFORME PDF ({len(alertas_para_informe)})",
         data=generar_html_ejecutivo(alertas_para_informe, ventana_str=rango_tiempo.upper()),
         file_name=f"Informe_Amenazas_{datetime.now(ZONA_MADRID).strftime('%Y%m%d_%H%M')}.html",
         mime="text/html",
         use_container_width=True
     )
 
+with col_btn_md:
+    st.download_button(
+        f"📝 INFORME WORD/MD ({len(alertas_para_informe)})",
+        data=generar_informe_markdown(alertas_para_informe),
+        file_name=f"Informe_Amenazas_{datetime.now(ZONA_MADRID).strftime('%Y%m%d_%H%M')}.md",
+        mime="text/markdown",
+        use_container_width=True
+    )
+
 with col_info:
     ult = st.session_state.get("ultima_actualizacion", "No registrada")
-    st.markdown(f'<div style="font-size:12.5px;color:#94a3b8;margin-top:6px;">🕒 <strong>Última sincronización:</strong> {ult} | <strong>{len(datos_filtrados)}</strong> alertas visibles.</div>', unsafe_allow_html=True)
+    st.markdown(f'<div style="font-size:12.5px;color:#94a3b8;margin-top:4px;">🕒 <strong>Última sincronización:</strong> {ult} (Madrid)<br>Mostrando <strong>{len(datos_filtrados)}</strong> alertas ({rango_tiempo}).</div>', unsafe_allow_html=True)
 
 # Callbacks de selección
 def marcar_todas_callback(lista_ids):
@@ -954,8 +1002,10 @@ with c_sel1:
 with c_sel2:
     st.button("⬜ Desmarcar todas", use_container_width=True, on_click=desmarcar_todas_callback, args=(ids_visibles,))
 
+st.write("")
+
 # ==========================================
-# RENDERIZADO DE ALERTAS
+# RENDERIZADO DE TARJETAS CORREGIDO
 # ==========================================
 def renderizar_tarjetas(lista_items):
     if not lista_items:
@@ -967,12 +1017,32 @@ def renderizar_tarjetas(lista_items):
         cat = item.get("categoria", "GLOBAL")
         canal_nombre = item.get("canal", "")
         fecha_str = obtener_fecha_madrid_str(item["fecha_dt"])
+        es_desinfo = canal_nombre.replace("@", "") in CANALES_DESINFORMACION_ESP
 
         b_color = {
             "ESPANA": "#dc2626", "EMPRESA": "#d97706", "GLOBAL": "#0f172a",
             "CRIMENES": "#991b1b", "CRIPTO": "#7c3aed", "SANCIONES": "#b45309",
             "DETENCION": "#be123c", "CHINA": "#1e3a8a", "TELEGRAM": "#0284c7", "REDES": "#059669"
         }.get(cat, "#0f172a")
+
+        # Insignias temporales y de medios
+        badges = ""
+        diff_tiempo = ahora_utc - item["fecha_dt"].astimezone(timezone.utc)
+        if diff_tiempo <= timedelta(hours=24):
+            badges += '<span class="badge-item" style="background:#fee2e2;color:#991b1b;border:1px solid #f87171;">⚡ 24H</span>'
+        elif diff_tiempo <= timedelta(hours=48):
+            badges += '<span class="badge-item" style="background:#fef08a;color:#854d0e;border:1px solid #eab308;">🔥 48H</span>'
+        elif diff_tiempo <= timedelta(days=7):
+            badges += '<span class="badge-item" style="background:#e0f2fe;color:#0369a1;border:1px solid #7dd3fc;">📅 7D</span>'
+
+        if es_desinfo:
+            sep = 'margin-left:6px;' if badges else ''
+            badges += f'<span class="badge-item" style="background:#ffe4e6;color:#be123c;border:1px solid #fda4af;{sep}">📢 DESINFORMACIÓN / FIMI</span>'
+
+        correlacionados = item.get("canales_correlacionados", [])
+        if len(correlacionados) > 1:
+            sep = 'margin-left:6px;' if badges else ''
+            badges += f'<span class="badge-item" style="background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;{sep}">🔄 {len(correlacionados)} MEDIOS</span>'
 
         t_safe = html_module.escape(str(item.get("titular", "")))
         h_safe = html_module.escape(str(item.get("hecho_reportado", "")))
@@ -985,26 +1055,26 @@ def renderizar_tarjetas(lista_items):
         if item.get("multimedia") and es_url_segura(item["multimedia"]):
             media_html = f'<div class="osint-media"><img src="{html_module.escape(item["multimedia"], quote=True)}" loading="lazy"/></div>'
 
+        badge_header = f'<div style="margin-bottom:8px;">{badges}<span style="font-size:12px;color:#64748b;margin-left:8px;">📅 {fecha_str} | 📢 {canal_safe}</span></div>' if badges else f'<div style="margin-bottom:8px;"><span style="font-size:12px;color:#64748b;">📅 {fecha_str} | 📢 {canal_safe}</span></div>'
+
         texto_copia = f"🚨 ALERTA OSINT | {cat}\nTitular: {item.get('titular', '')}\nFuente: {canal_nombre} | Fecha: {fecha_str}\nEnlace: {item.get('enlace', '#')}"
         b64_copia = base64.b64encode(texto_copia.encode('utf-8')).decode('utf-8')
 
-        tarjeta_html = f"""
-        <div class="osint-card" style="border-left: 8px solid {b_color};">
-            <div class="osint-flex">
-                {media_html}
-                <div class="osint-body">
-                    <div style="font-size:12px;color:#64748b;margin-bottom:6px;">📅 {fecha_str} | 📢 {canal_safe}</div>
-                    <div class="osint-title">{t_safe}</div>
-                    <div style="margin-bottom:8px;">{pildoras_ner}</div>
-                    <div class="osint-resumen"><strong>📄 Hecho:</strong> {h_safe}</div>
-                    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-                        <a href="{enlace_attr}" target="_blank" class="btn-source">🔗 ABRIR FUENTE ORIGINAL</a>
-                        <button class="btn-copy" onclick="navigator.clipboard.writeText(decodeURIComponent(escape(window.atob('{b64_copia}')))).then(()=>alert('📋 Alerta copiada'))">📋 COPIAR ALERTA</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-        """
+        # Ensamblaje limpio sin sangrías iniciales que confundan a Markdown
+        tarjeta_html = (
+            f'<div class="osint-card" style="border-left: 8px solid {b_color};">'
+            f'<div class="osint-flex">{media_html}'
+            f'<div class="osint-body">'
+            f'{badge_header}'
+            f'<div class="osint-title">{t_safe}</div>'
+            f'<div style="margin-bottom:8px;">{pildoras_ner}</div>'
+            f'<div class="osint-resumen"><strong>📄 Hecho:</strong> {h_safe}</div>'
+            f'<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">'
+            f'<a href="{enlace_attr}" target="_blank" class="btn-source">🔗 ABRIR FUENTE ORIGINAL</a>'
+            f'<button class="btn-copy" onclick="navigator.clipboard.writeText(decodeURIComponent(escape(window.atob(\'{b64_copia}\')))).then(()=>alert(\'📋 Alerta copiada\'))">📋 COPIAR ALERTA</button>'
+            f'</div>'
+            f'</div></div></div>'
+        )
 
         col_check, col_card = st.columns([0.05, 0.95])
         with col_check:
@@ -1014,8 +1084,14 @@ def renderizar_tarjetas(lista_items):
 
         with col_card:
             st.markdown(tarjeta_html, unsafe_allow_html=True)
+            if item.get("fuentes_coincidentes"):
+                with st.expander(f"📑 Ver {len(item['fuentes_coincidentes'])} cobertura(s) adicional(es) de este mismo evento"):
+                    for f_sec in item["fuentes_coincidentes"]:
+                        st.markdown(f"- **{f_sec['canal']}:** [{f_sec['titular']}]({f_sec['enlace']})")
 
-# Pestañas operativas
+# ==========================================
+# PESTAÑAS OPERATIVAS
+# ==========================================
 l_esp = [x for x in datos_filtrados if x.get("categoria") == "ESPANA"]
 l_emp = [x for x in datos_filtrados if x.get("categoria") == "EMPRESA"]
 l_prensa = [x for x in datos_filtrados if x.get("categoria") == "GLOBAL"]
