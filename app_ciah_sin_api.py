@@ -10,7 +10,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Blindaje visual CSS limpio
+# Blindaje visual CSS
 st.markdown("""
 <style>
     #MainMenu, footer { visibility: hidden !important; display: none !important; height: 0px !important; }
@@ -21,24 +21,6 @@ st.markdown("""
         visibility: hidden !important; display: none !important; opacity: 0 !important; pointer-events: none !important;
     }
     .main { background-color: #0b0f19; }
-    
-    /* Contenedor flotante superior para el traductor de Google */
-    .gad-translate-bar {
-        position: fixed;
-        top: 8px;
-        right: 18px;
-        z-index: 999999;
-        background: rgba(15, 23, 42, 0.95);
-        border: 1px solid #38bdf8;
-        border-radius: 6px;
-        padding: 4px 10px;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-    }
-    .goog-te-banner-frame.skiptranslate { display: none !important; }
-    body { top: 0px !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -74,7 +56,7 @@ if not gestionar_acceso():
     st.stop()
 
 # ==========================================
-# 2. CLIENTE HTTP Y CONFIGURACIÓN
+# 2. CLIENTE HTTP Y CACHÉ PERSISTENTE
 # ==========================================
 import requests
 from requests.adapters import HTTPAdapter
@@ -88,6 +70,7 @@ import hashlib
 from email.utils import parsedate_to_datetime
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 from difflib import SequenceMatcher
 from urllib.parse import urlparse, urlunparse
 import pandas as pd
@@ -113,10 +96,15 @@ def get_sesion_http():
     })
     return sesion
 
+@st.cache_resource
+def get_traducciones_cache():
+    return {}, threading.Lock()
+
 SESION_HTTP = get_sesion_http()
+CACHE_TRADUCCIONES, CACHE_LOCK = get_traducciones_cache()
 
 # ==========================================
-# 3. MATRICES DE INTELIGENCIA Y REGEX
+# 3. REGEX Y MATRICES DE AMENAZAS HÍBRIDAS
 # ==========================================
 CANALES_DESINFORMACION_ESP = {
     "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu", "ASupersharij"
@@ -145,15 +133,15 @@ PATRON_ACTORES = re.compile(
     r')\b', re.IGNORECASE
 )
 
-# Vectores estrictos: incluye boicot electoral, sabotajes marítimos/cables y guerra híbrida
 PATRON_VECTORES = re.compile(
     r'\b('
     r'hibrid\w*|hybrid\w*|sabotaj\w*|sabotage\w*|saboteador\w*|espia\w*|espionaje|spy\w*|espionage|spying|'
     r'ciberataque\w*|ciberespionaje|ciberdefensa|cyberattack\w*|ransomware|ddos|malware|infiltracion|apt\d+|'
-    r'desinformacion|disinformation|fimi|doppelganger|propaganda|injerencia\w*|injerencia electoral|boicot electoral|'
-    r'elecciones.*rus\w*|interferencia.*eleccion\w*|manipulacion informativa|campana de influencia|'
-    r'sancion\w*|sanction\w*|elusion\w*|evasion\w*|flota fantasma|shadow fleet|petrolero clandestino|dark fleet|'
-    r'cable submarino|undersea cable|red ferroviaria sabot\w*|infraestructura critica|paquete incendiario|incendio provocado|arson|'
+    r'desinformacion|disinformation|fimi|doppelganger|propaganda pro-kremlin|'
+    r'injerencia rusa|injerencia extranjera|injerencia de pekin|injerencia china|injerencia electoral|boicot electoral|'
+    r'interferencia electoral|hackeo electoral|campana de desinformacion|'
+    r'sancion\w*|sanction\w*|elusion de sanciones|evasion de sanciones|flota fantasma|shadow fleet|dark fleet|petrolero clandestino|'
+    r'cable submarino|undersea cable|red ferroviaria sabot\w*|paquete incendiario|incendio provocado|arson|'
     r'crimen de guerra|war crime\w*|cpi|icc|genocidio|fosa comun|tortura\w*|'
     r'detenido por espionaje|arrestado por sabotaje|detencion de espia|zatrzymany|festnahme|detained|arrested|'
     r'dron kamikaze|shahed|geran|uav militar|jamming|guerra electronica|electronic warfare|misil\w*|bombardeo|ofensiva|'
@@ -217,14 +205,13 @@ def es_relevante(texto, canal):
     if not texto: return False
     canal_l = canal.lower()
     
-    # Canales tácticos e inteligencia prefiltrados
     if any(k in canal_l for k in ["sbu", "gur", "rybar", "sharij", "informnapalm", "bellingcat", "insider", "occrp", "euvsdisinfo", "generalstaff"]):
         return True
 
     t_norm = normalizar_texto(texto)
     t_raw = str(texto)
 
-    # Exclusiones de política general no relacionada con amenazas híbridas
+    # Exclusiones de noticias no relacionadas
     if re.search(r'\b(marruecos|ceuta|melilla|pateras|inmigracion irregular|vaticano|santa sede|papa francisco|liga de futbol|champions|supermercado|receta)\b', t_norm):
         if not re.search(r'\b(rusia|ruso|kremlin|china|ciberataque|sabotaje|espionaje|fimi|pegasus)\b', t_norm):
             return False
@@ -243,35 +230,41 @@ def categorizar_alerta(titular, cuerpo, plat, canal):
     
     t_all = normalizar_texto(f"{titular} {cuerpo}")
     
-    # 1. España e infraestructuras críticas (incluye injerencia electoral y sabotaje OTAN España-Francia)
-    if re.search(r'\b(espana|espanol\w*|madrid|barcelona|cartagena|\brota\b|torrejon|cni|dsn|incibe|ccn-cert|margarita robles|elecciones.*rus\w*|boicot.*eleccion\w*)\b', t_all):
-        if bool(PATRON_ACTORES.search(t_all)) or bool(PATRON_VECTORES.search(t_all)) or "otan" in t_all or "sabotaje" in t_all:
+    # 1. ESPAÑA E INFRAESTRUCTURAS CRÍTICAS
+    # Requiere obligatoriamente que mencione España Y un vector hostil real verificado
+    menciona_espana = bool(re.search(r'\b(espana|espanol\w*|madrid|barcelona|cartagena|\brota\b|torrejon|cni|dsn|incibe|ccn-cert|margarita robles)\b', t_all))
+    if menciona_espana:
+        # Si habla de elecciones o política, exige explícitamente términos de injerencia/boicot por actor hostil
+        if re.search(r'\b(eleccion\w*|comicios|votacion\w*)\b', t_all):
+            if re.search(r'\b(injerencia|boicot|hackeo|ciberataque|desinformacion|fimi|rusia|ruso|kremlin|botnet|doppelganger)\b', t_all):
+                return "ESPANA"
+        elif bool(PATRON_VECTORES.search(t_all)) or bool(PATRON_ACTORES.search(t_all)):
             return "ESPANA"
     
-    # 2. Empresas estratégicas de defensa (EXIGE que haya vector hostil para no meter huelgas o finanzas)
+    # 2. EMPRESAS ESTRATÉGICAS DE DEFENSA (Exige vector hostil para evitar huelgas o noticias financieras)
     menciona_empresa = any(re.search(r'\b' + re.escape(emp) + r'\b', t_all) for emp in EMPRESAS_ESTRATEGICAS_ESP)
     if menciona_empresa:
-        if bool(PATRON_VECTORES.search(t_all)) or bool(PATRON_ACTORES.search(t_all)) or re.search(r'\b(defensa|armamento|militar|contrato militar|ciberseguridad)\b', t_all):
+        if bool(PATRON_VECTORES.search(t_all)) or bool(PATRON_ACTORES.search(t_all)) or re.search(r'\b(defensa|armamento|militar|contrato militar|ciberseguridad|misil|dron)\b', t_all):
             return "EMPRESA"
         
-    # 3. Detenciones por espionaje/sabotaje
+    # 3. DETENCIONES POR ESPIONAJE / SABOTAJE
     if re.search(r'\b(detenido\w*|arrestado\w*|detencion\w*|arresto\w*|zatrzymany|festnahme|detained|arrested)\b', t_all):
         if not re.search(r'\b(prisionero de guerra|pow)\b', t_all):
             return "DETENCION"
             
-    # 4. Criptomonedas / FININT
+    # 4. CRIPTOMONEDAS / FININT
     if re.search(r'\b(cripto\w*|bitcoin|btc|usdt|tether|garantex|blockchain)\b', t_all):
         return "CRIPTO"
         
-    # 5. Sanciones y flota fantasma
+    # 5. SANCIONES Y FLOTA FANTASMA
     if re.search(r'\b(sancion\w*|sanction\w*|elusion|evasion|flota fantasma|shadow fleet|dark fleet|tope al crudo|price cap|ofac|opensanctions|kse institute)\b', t_all):
         return "SANCIONES"
         
-    # 6. China e injerencia
+    # 6. CHINA E INJERENCIA
     if re.search(r'\b(china|chino\w*|pekin|beijing|xi jinping|taiwan|mss|apt41|volt typhoon)\b', t_all) or PATRON_CHINO.search(titular + cuerpo):
         return "CHINA"
         
-    # 7. Crímenes de guerra y terrorismo
+    # 7. CRÍMENES DE GUERRA Y TERRORISMO
     if re.search(r'\b(crimen de guerra|war crime\w*|cpi|icc|la haya|genocidio|tortura\w*|masacre|bucha|mariupol|terrorismo|atentado)\b', t_all):
         return "CRIMENES"
         
@@ -297,13 +290,55 @@ def obtener_contexto_fuente(categoria, canal=""):
     return contextos.get(categoria, "Información operativa de fuentes abiertas sobre el conflicto.")
 
 # ==========================================
-# 6. PARSER BOOLEANO MULTILINGÜE
+# 6. TRADUCCIÓN NATIVA ULTRA RÁPIDA
+# ==========================================
+def traducir_texto(texto_orig):
+    if not texto_orig: return ""
+    t_clean = limpiar_html_texto(texto_orig)
+    if len(t_clean) < 4: return t_clean
+
+    with CACHE_LOCK:
+        if t_clean in CACHE_TRADUCCIONES:
+            return CACHE_TRADUCCIONES[t_clean]
+
+    medio_suffix = ""
+    texto_a_traducir = t_clean
+    m_medio = re.search(r'(\s*[-–|]\s*[^-–|]{2,40})$', t_clean)
+    if m_medio:
+        medio_suffix = m_medio.group(1)
+        texto_a_traducir = t_clean[:m_medio.start()].strip()
+
+    endpoints = [
+        {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:600]},
+        {"client": "dict-chrome-ex", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:600]}
+    ]
+
+    for p in endpoints:
+        try:
+            r = SESION_HTTP.get("https://translate.googleapis.com/translate_a/single", params=p, timeout=2.2)
+            if r.status_code == 200:
+                data = r.json()
+                if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
+                    partes = [seg[0] for seg in data[0] if isinstance(seg, list) and len(seg) > 0 and seg[0]]
+                    trad = limpiar_html_texto("".join(partes))
+                    if len(trad) > 3:
+                        res = f"{trad}{medio_suffix}" if medio_suffix else trad
+                        with CACHE_LOCK:
+                            CACHE_TRADUCCIONES[t_clean] = res
+                        return res
+        except Exception:
+            continue
+
+    return t_clean
+
+# ==========================================
+# 7. PARSER BOOLEANO MULTILINGÜE
 # ==========================================
 def cumple_busqueda_booleana(item, query_str):
     if not query_str or not query_str.strip():
         return True
 
-    corpus = f"{item.get('titular_raw','')} {item.get('cuerpo_raw','')}"
+    corpus = f"{item.get('titular_raw','')} {item.get('cuerpo_raw','')} {item.get('titular_traducido','')} {item.get('cuerpo_traducido','')}"
     t_norm = normalizar_texto(corpus)
     q_raw = query_str.strip()
 
@@ -330,7 +365,7 @@ def cumple_busqueda_booleana(item, query_str):
     return False
 
 # ==========================================
-# 7. RASTREADORES PARALELOS
+# 8. RASTREADORES PARALELOS
 # ==========================================
 def procesar_feed_rss(url, etiqueta):
     items = []
@@ -461,7 +496,7 @@ def raspar_youtube(canal_id, etiqueta):
     return items
 
 # ==========================================
-# 8. BANCO COMPLETO DE FUENTES OSINT GLOBALES
+# 9. BANCO COMPLETO DE FUENTES OSINT CALIBRADO
 # ==========================================
 @st.cache_data(ttl=600, show_spinner=False)
 def cargar_todas_las_fuentes():
@@ -482,32 +517,30 @@ def cargar_todas_las_fuentes():
         ("UC7_2eFfP_n5v3H_Z_L-v_4w", "YouTube: Bellingcat OSINT")
     ]
 
-    # Búsquedas precisas de inteligencia sobre OTAN, sabotajes y elecciones
+    # Consultas ajustadas: eliminadas combinaciones que capturaban noticias políticas ordinarias
     fuentes_rss = [
-        # España: Elecciones, boicot ruso, cables submarinos y OTAN
-        ("https://news.google.com/rss/search?q=(España+OR+Madrid)+(injerencia+OR+boicot+OR+elecciones)+(Rusia+OR+Kremlin+OR+ciberataque)&hl=es&gl=ES&ceid=ES:es", "España Injerencia Electoral"),
-        ("https://news.google.com/rss/search?q=(OTAN+OR+NATO)+(sabotaje+OR+\"cables+submarinos\"+OR+\"infraestructura+crítica\")+(España+OR+Francia)&hl=es&gl=ES&ceid=ES:es", "OTAN Sabotaje ES-FR"),
-        ("https://news.google.com/rss/search?q=(DSN+OR+\"Seguridad+Nacional\")+(sabotaje+OR+ciberataque+OR+espionaje+OR+híbridas)&hl=es&gl=ES&ceid=ES:es", "DSN Amenazas (ES)"),
-        ("https://news.google.com/rss/search?q=(CNI+OR+\"Guardia+Civil\"+OR+\"Policia+Nacional\")+(sabotaje+OR+espia+OR+ciberataque+OR+GRU)&hl=es&gl=ES&ceid=ES:es", "España Seguridad (ES)"),
-        ("https://news.google.com/rss/search?q=(detenido+OR+arrestado)+(espia+ruso+OR+espia+chino+OR+sabotaje)&hl=es&gl=ES&ceid=ES:es", "Detenciones (ES)"),
-        ("https://news.google.com/rss/search?q=(\"empresas+amenazadas+por+rusia\"+OR+Tecnobit+OR+Destinus+OR+Indra+OR+Navantia+OR+Escribano)&hl=es&gl=ES&ceid=ES:es", "Empresas Defensa (ES)"),
-        ("https://theobjective.com/feed/", "The Objective (ES)"),
+        # España: Injerencia, espionaje y sabotaje comprobado
+        ("https://news.google.com/rss/search?q=(España+OR+Madrid)+(\"injerencia+rusa\"+OR+\"ciberataque+ruso\"+OR+\"espionaje+ruso\"+OR+\"sabotaje+ruso\")&hl=es&gl=ES&ceid=ES:es", "España Injerencia Rusa"),
+        ("https://news.google.com/rss/search?q=(OTAN+OR+NATO)+(sabotaje+OR+\"cables+submarinos\")+(España+OR+Francia)&hl=es&gl=ES&ceid=ES:es", "OTAN Sabotaje ES-FR"),
+        ("https://news.google.com/rss/search?q=(DSN+OR+\"Seguridad+Nacional\")+(sabotaje+OR+ciberataque+OR+espionaje+OR+híbridas)&hl=es&gl=ES&ceid=ES:es", "DSN Amenazas"),
+        ("https://news.google.com/rss/search?q=(CNI+OR+\"Guardia+Civil\"+OR+\"Policia+Nacional\")+(sabotaje+OR+espia+OR+ciberataque+OR+GRU)&hl=es&gl=ES&ceid=ES:es", "España Seguridad"),
+        ("https://news.google.com/rss/search?q=(detenido+OR+arrestado)+(espia+ruso+OR+espia+chino+OR+sabotaje)&hl=es&gl=ES&ceid=ES:es", "Detenciones"),
+        ("https://news.google.com/rss/search?q=(\"empresas+amenazadas+por+rusia\"+OR+Tecnobit+OR+Destinus+OR+Indra+OR+Navantia+OR+Escribano)&hl=es&gl=ES&ceid=ES:es", "Empresas Defensa"),
+        ("https://theobjective.com/feed/", "The Objective"),
 
-        # Cobertura OTAN, UE y Militar Internacional
+        # OTAN, UE e Institucional Internacional
         ("https://news.google.com/rss/search?q=NATO+(sabotage+OR+\"undersea+cables\"+OR+\"hybrid+threats\")+Europe&hl=en-US&gl=US&ceid=US:en", "NATO Hybrid Threats (EN)"),
         ("https://news.google.com/rss/search?q=(\"Consilium\"+OR+\"Council+of+the+EU\")+(hybrid+OR+sabotage+OR+sanctions)&hl=en-US&gl=US&ceid=US:en", "Consilium UE (EN)"),
         ("https://news.google.com/rss/search?q=(\"NATO+StratCom\"+OR+\"StratCom+COE\")+disinformation&hl=en-US&gl=US&ceid=US:en", "NATO StratCom (EN)"),
         ("https://news.google.com/rss/search?q=Europol+(hybrid+OR+sabotage+OR+\"organized+crime\")+Russia&hl=en-US&gl=US&ceid=US:en", "Europol (EN)"),
         ("https://news.google.com/rss/search?q=Eurojust+(\"cross-border\"+OR+sanctions+OR+investigation)&hl=en-US&gl=US&ceid=US:en", "Eurojust (EN)"),
 
-        # Desinformación, FIMI e Investigaciones Técnicas
+        # FIMI, Desinformación e Investigaciones OSINT
         ("https://euvsdisinfo.eu/feed/", "EUvsDisinfo (EN)"),
         ("https://www.disinfo.eu/feed/", "EU DisinfoLab (EN)"),
         ("https://citizenlab.ca/feed/", "Citizen Lab (EN)"),
         ("https://chinadigitaltimes.net/feed/", "China Digital Times (EN/ZH)"),
         ("https://news.google.com/rss/search?q=(\"EEAS\"+OR+\"FIMI\"+OR+\"Doppelganger\")+disinformation&hl=en-US&gl=US&ceid=US:en", "EEAS FIMI (EN)"),
-
-        # Investigaciones OSINT y Crimen Organizado
         ("https://www.bellingcat.com/feed/", "Bellingcat OSINT (EN)"),
         ("https://theins.ru/feed", "The Insider (RU/EN)"),
         ("https://www.occrp.org/en/feed", "OCCRP (EN)"),
@@ -515,7 +548,7 @@ def cargar_todas_las_fuentes():
         ("https://www.rumafia.net/en/rss/", "RuMafia (EN)"),
         ("https://antikor.com.ua/articles.rss", "Antikor Portal (UA)"),
 
-        # Guerra y frente en ruso y ucraniano
+        # Frente y Guerra en ruso/ucraniano
         ("https://news.google.com/rss/search?q=(\"Institute+for+the+Study+of+War\"+OR+\"ISW\")+Russian+offensive&hl=en-US&gl=US&ceid=US:en", "ISW War Studies (EN)"),
         ("https://kyivindependent.com/feed/", "The Kyiv Independent (EN)"),
         ("https://www.pravda.com.ua/rss/", "Ukrainska Pravda (UA)"),
@@ -584,28 +617,7 @@ def cargar_todas_las_fuentes():
     return unicos
 
 # ==========================================
-# 9. BARRA DE TRADUCCIÓN FLOTANTE (ESTILO BUSCADOR GOOGLE)
-# ==========================================
-st.markdown("""
-<div class="gad-translate-bar">
-    <span style="font-size: 11.5px; color: #38bdf8; font-family: sans-serif; font-weight: 800;">🌐 TRADUCCIÓN:</span>
-    <div id="google_translate_element"></div>
-</div>
-<script type="text/javascript">
-function googleTranslateElementInit() {
-  new google.translate.TranslateElement({
-      pageLanguage: 'auto',
-      includedLanguages: 'es,en,ru,uk,pl,zh-CN,ar',
-      layout: google.translate.TranslateElement.InlineLayout.SIMPLE,
-      autoDisplay: false
-  }, 'google_translate_element');
-}
-</script>
-<script type="text/javascript" src="//translate.google.com/translate.a/element.js?cb=googleTranslateElementInit"></script>
-""", unsafe_allow_html=True)
-
-# ==========================================
-# 10. CABECERA TÁCTICA COMPLETA (ANCHO 100%)
+# 10. CABECERA TÁCTICA ORIGINAL Y SINCRONIZACIÓN
 # ==========================================
 logo_svg = """<svg width="65" height="65" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
     <circle cx="50" cy="50" r="47" fill="#1e293b" stroke="#334155" stroke-width="2" />
@@ -615,7 +627,7 @@ logo_svg = """<svg width="65" height="65" viewBox="0 0 100 100" fill="none" xmln
 </svg>"""
 
 st.markdown(f"""
-<div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); border-left: 8px solid #dc2626; border-radius: 10px; padding: 16px 22px; margin-bottom: 14px; display: flex; align-items: center; gap: 20px; width: 100%;">
+<div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); border-left: 8px solid #dc2626; border-radius: 10px; padding: 14px 22px; margin-bottom: 14px; display: flex; align-items: center; gap: 20px; width: 100%;">
     <div>{logo_svg}</div>
     <div>
         <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 900; letter-spacing: 0.5px;">BUSCADOR DE AMENAZAS HÍBRIDAS</h1>
@@ -634,22 +646,41 @@ if "alertas_base" not in st.session_state:
             cat = categorizar_alerta(item["titular_raw"], item["cuerpo_raw"], item["plataforma"], item["canal"])
             item["categoria"] = cat
             item["evaluacion_contexto"] = obtener_contexto_fuente(cat, item["canal"])
+            item["titular_traducido"] = ""
+            item["cuerpo_traducido"] = ""
+            item["traducido_ok"] = False
         st.session_state.alertas_base = unicos
         st.session_state.ultima_actualizacion = obtener_fecha_madrid_str()
         st.session_state.seleccionadas_pdf = {a["id"] for a in unicos}
     panel_estado.empty()
 
 # ==========================================
-# 11. PANEL DE FILTROS Y CONTROLES
+# 11. PANEL DE CONTROL, TRADUCCIÓN NATIVA Y FILTROS
 # ==========================================
 with st.container():
-    c_flt1, c_flt2, c_flt3 = st.columns([1.8, 1.2, 1.2])
+    c_flt1, c_flt2, c_flt3, c_flt4 = st.columns([1.6, 1.1, 1.1, 1.2])
     with c_flt1:
         busqueda_txt = st.text_input("🔍 Búsqueda Booleana (multilingüe):", placeholder='Ej: "shadow fleet" OR sabotaje -incendio')
     with c_flt2:
         rango_tiempo = st.selectbox("📅 Ventana Temporal:", ["Últimas 24 Horas", "Últimas 48 Horas", "Últimas 72 Horas", "Última Semana", "Histórico Completo"], index=4)
     with c_flt3:
         canales_sel = st.multiselect("Filtrar por Canal / Fuente:", sorted(list({a["canal"] for a in st.session_state.alertas_base})))
+    with c_flt4:
+        # Interruptor de traducción global funcional y garantizado
+        st.write("")
+        traducir_todo_ahora = st.toggle("🌐 TRADUCIR TODO AL ESPAÑOL", value=False)
+
+if traducir_todo_ahora:
+    pendientes = [a for a in st.session_state.alertas_base if not a.get("traducido_ok")]
+    if pendientes:
+        with st.spinner(f"Traduciendo {len(pendientes)} alertas al castellano..."):
+            with ThreadPoolExecutor(max_workers=20) as ex:
+                titulares_es = list(ex.map(traducir_texto, [a["titular_raw"] for a in pendientes]))
+                cuerpos_es = list(ex.map(traducir_texto, [a["cuerpo_raw"][:400] for a in pendientes]))
+            for a, t_es, c_es in zip(pendientes, titulares_es, cuerpos_es):
+                a["titular_traducido"] = t_es
+                a["cuerpo_traducido"] = c_es
+                a["traducido_ok"] = True
 
 alertas_visibles = st.session_state.alertas_base
 
@@ -684,8 +715,9 @@ with c_btn2:
     <body style='font-family:sans-serif;padding:20px;'><h1>INFORME DE SITUACIÓN // AMENAZAS HÍBRIDAS</h1>
     <p>Emisión: {obtener_fecha_madrid_str()} | Ventana: {rango_tiempo}</p><hr>"""
     for a in alertas_informe:
+        tit_exp = a['titular_traducido'] if a.get('traducido_ok') else a['titular_raw']
         html_reporte += f"<div style='border-bottom:1px solid #ccc;padding:10px 0;'>"
-        html_reporte += f"<h3>{html_module.escape(a['titular_raw'])}</h3>"
+        html_reporte += f"<h3>{html_module.escape(tit_exp)}</h3>"
         html_reporte += f"<p><strong>Fuente:</strong> {html_module.escape(a['canal'])} | <strong>Contexto:</strong> {html_module.escape(a['evaluacion_contexto'])}</p>"
         html_reporte += f"<p><a href='{url_sanitizada(a['enlace'])}' target='_blank'>Enlace a la fuente</a></p></div>"
     html_reporte += "</body></html>"
@@ -701,7 +733,8 @@ with c_btn2:
 with c_btn3:
     md_reporte = f"# INFORME DE INTELIGENCIA\n**Emisión:** {obtener_fecha_madrid_str()}\n\n---\n\n"
     for a in alertas_informe:
-        md_reporte += f"### {a['titular_raw']}\n- **Fuente:** {a['canal']}\n- **Contexto:** {a['evaluacion_contexto']}\n- **Enlace:** {a['enlace']}\n\n"
+        tit_exp = a['titular_traducido'] if a.get('traducido_ok') else a['titular_raw']
+        md_reporte += f"### {tit_exp}\n- **Fuente:** {a['canal']}\n- **Contexto:** {a['evaluacion_contexto']}\n- **Enlace:** {a['enlace']}\n\n"
 
     st.download_button(
         f"📝 INFORME MD ({len(alertas_informe)})",
@@ -727,7 +760,7 @@ with col_s2:
 st.write("")
 
 # ==========================================
-# 12. RENDERIZADO VISUAL COMPLETO (CON BADGES)
+# 12. RENDERIZADO VISUAL COMPLETO
 # ==========================================
 def renderizar_tarjetas(lista_items):
     if not lista_items:
@@ -744,8 +777,10 @@ def renderizar_tarjetas(lista_items):
             "DETENCION": "#be123c", "CHINA": "#1e3a8a", "TELEGRAM": "#0284c7", "REDES": "#059669"
         }.get(cat, "#0f172a")
 
-        titular_mostrar = item["titular_raw"]
-        cuerpo_mostrar = item["cuerpo_raw"]
+        esta_traducido = item.get("traducido_ok", False)
+        titular_mostrar = item["titular_traducido"] if (esta_traducido and item["titular_traducido"]) else item["titular_raw"]
+        cuerpo_mostrar = item["cuerpo_traducido"] if (esta_traducido and item["cuerpo_traducido"]) else item["cuerpo_raw"]
+
         enlace_seguro = url_sanitizada(item.get("enlace", ""))
         fecha_str = obtener_fecha_madrid_str(item["fecha_dt"]) if item["fecha_dt"] else "Fecha reciente"
 
@@ -770,7 +805,7 @@ def renderizar_tarjetas(lista_items):
         if cat in ["TELEGRAM", "REDES"]:
             bloque_reporte = f'<div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 14px; color: #1e293b; font-size: 13.5px; line-height: 1.55; text-align: justify; margin-bottom: 8px;"><strong>📄 Reporte / Post:</strong><br>{html_module.escape(cuerpo_mostrar)}</div>'
 
-        # Tarjeta HTML limpia sin sangrías erróneas
+        # Tarjeta HTML en bloque compacto sin sangrías erróneas
         html_card = (
             f'<div style="background:#ffffff; border:1px solid #cbd5e1; border-left:7px solid {b_color}; border-radius:8px; padding:14px 18px; margin-bottom:8px;">'
             f'<div style="display: flex; flex-wrap: wrap; align-items: flex-start;">'
@@ -793,6 +828,23 @@ def renderizar_tarjetas(lista_items):
             st.checkbox("Sel", key=f"sel_{item['id']}", label_visibility="collapsed")
         with col_content:
             st.markdown(html_card, unsafe_allow_html=True)
+            
+            # Botón de traducción bajo demanda para esta alerta específica
+            c_tr, c_cp = st.columns([0.25, 0.75])
+            with c_tr:
+                if not esta_traducido:
+                    if st.button("🌐 TRADUCIR ALERTA", key=f"btn_tr_{item['id']}", type="secondary", use_container_width=True):
+                        item["titular_traducido"] = traducir_texto(item["titular_raw"])
+                        item["cuerpo_traducido"] = traducir_texto(item["cuerpo_raw"][:800])
+                        item["traducido_ok"] = True
+                        st.rerun()
+                else:
+                    st.caption("✅ Traducida al español")
+
+            # Formato de copia de la alerta (siempre en castellano si fue traducida)
+            with st.expander("📋 Formato de alerta para copiar"):
+                texto_copia = f"🚨 ALERTA OSINT | {cat}\nTitular: {titular_mostrar}\nReporte: {cuerpo_mostrar[:350]}...\nFuente: {item['canal']} | Fecha: {fecha_str}\nEnlace: {item.get('enlace','')}"
+                st.code(texto_copia, language="markdown")
 
             if item.get("fuentes_coincidentes"):
                 with st.expander(f"📑 Coberturas coincidentes ({len(item['fuentes_coincidentes'])})"):
