@@ -5,6 +5,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup
 import re
 import base64
@@ -30,8 +31,19 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Zona horaria de referencia nacional
+ZONA_MADRID = ZoneInfo("Europe/Madrid")
+
+def obtener_fecha_madrid_str(dt=None):
+    if dt is None:
+        dt = datetime.now(timezone.utc)
+    elif dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    dt_madrid = dt.astimezone(ZONA_MADRID)
+    return dt_madrid.strftime("%d/%m/%Y %H:%M:%S")
+
 # ==========================================
-# BLINDAJE VISUAL DEFINITIVO (IFRAME + VENTANA PADRE)
+# BLINDAJE VISUAL DEFINITIVO (ANTI-GITHUB / PERFIL)
 # ==========================================
 st.markdown("""
 <style>
@@ -59,7 +71,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Inyector JavaScript directo al marco padre para suprimir barra de gestión y perfil
 components.html("""
 <script>
     function eliminarElementosGestion() {
@@ -118,9 +129,9 @@ def gestionar_acceso():
         return True
 
     st.markdown("""
-        <div style="max-width: 460px; margin: 40px auto 20px auto; padding: 25px; background: #0f172a; border-radius: 10px; border-left: 6px solid #dc2626; color: white; box-shadow: 0 10px 25px rgba(0,0,0,0.5);">
-            <h2 style="margin-top: 0; color: #ffffff; font-size: 20px;">🔒 Acceso Restringido</h2>
-            <p style="color: #94a3b8; font-size: 13.5px; margin-bottom: 0;">Sistema de Inteligencia de Amenazas Híbridas (OSINT). Introduzca la credencial autorizada para continuar.</p>
+        <div style="max-width: 470px; margin: 40px auto 20px auto; padding: 26px; background: #0f172a; border-radius: 12px; border-left: 6px solid #dc2626; color: white; box-shadow: 0 16px 36px rgba(0,0,0,0.6);">
+            <h2 style="margin-top: 0; color: #ffffff; font-size: 21px; letter-spacing: 0.5px;">🔒 Acceso Restringido</h2>
+            <p style="color: #94a3b8; font-size: 13.5px; margin-bottom: 0;">Sistema de Inteligencia de Amenazas Híbridas (OSINT). Introduzca la credencial operativa autorizada.</p>
         </div>
     """, unsafe_allow_html=True)
 
@@ -265,10 +276,9 @@ def traducir_un_titular_individual(titular_orig):
         medio_suffix = m_medio.group(1)
         texto_a_traducir = t_clean[:m_medio.start()].strip()
 
-    # Pequeña pausa estocástica para no activar rate-limit de Google
-    time.sleep(random.uniform(0.04, 0.09))
+    time.sleep(random.uniform(0.04, 0.08))
 
-    for intento in range(2):
+    for _ in range(2):
         try:
             url = "https://translate.googleapis.com/translate_a/single"
             params = {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:380]}
@@ -293,7 +303,6 @@ def traducir_un_titular_individual(titular_orig):
     return t_clean
 
 def traducir_lote_titulares(lista_titulares):
-    # Concurrencia balanceada a 5 workers para evitar bloqueos por IP
     with ThreadPoolExecutor(max_workers=5) as ex:
         resultados = list(ex.map(traducir_un_titular_individual, lista_titulares))
     return resultados
@@ -939,7 +948,6 @@ def ejecutar_actualizacion_total():
         else:
             titular_final = titular_limpio
             
-            # Cascada de clasificación por prioridad
             if es_empresa_esp(titular_limpio, cuerpo_intacto):
                 cat_final = "EMPRESA"
             elif es_detencion(titular_limpio, cuerpo_intacto):
@@ -978,7 +986,7 @@ def ejecutar_actualizacion_total():
     alertas_finales.sort(key=lambda x: x["fecha_dt"], reverse=True)
 
     st.session_state.alertas_monitor = alertas_finales
-    st.session_state.ultima_actualizacion = datetime.now(timezone.utc).strftime("%d/%m/%Y %H:%M:%S UTC")
+    st.session_state.ultima_actualizacion = obtener_fecha_madrid_str()
     st.session_state.seleccionadas_pdf = {a["id"] for a in alertas_finales}
     for a in alertas_finales:
         st.session_state[f"sel_{a['id']}"] = True
@@ -992,7 +1000,7 @@ def exportar_alertas_csv(alertas):
     filas = []
     for a in alertas:
         filas.append({
-            "Fecha (UTC)": a["fecha_dt"].strftime("%Y-%m-%d %H:%M"),
+            "Fecha (Madrid)": obtener_fecha_madrid_str(a["fecha_dt"]),
             "Categoría": a["categoria"],
             "Plataforma": a.get("plataforma", ""),
             "Canal/Fuente": a["canal"],
@@ -1022,7 +1030,7 @@ SECCIONES_INFORME = [
 ]
 
 def generar_html_ejecutivo(alertas, solo_48h=False):
-    fecha_actual = datetime.now().strftime("%d/%m/%Y %H:%M")
+    fecha_actual = obtener_fecha_madrid_str()
     subtitulo_filtro = "INFORME OPERATIVO EXCLUSIVO (ÚLTIMAS 48 HORAS)" if solo_48h else "INFORME GENERAL CONSOLIDADO"
     
     html = f"""<!DOCTYPE html>
@@ -1085,13 +1093,13 @@ def generar_html_ejecutivo(alertas, solo_48h=False):
 </head>
 <body>
     <div class="toolbar">
-        <div><strong>Informe Inteligencia</strong> &nbsp;|&nbsp; Amenazas Clasificadas</div>
+        <div><strong>Informe de Inteligencia</strong> &nbsp;|&nbsp; Amenazas Clasificadas</div>
         <button class="btn-print" onclick="window.print()">🖨️ IMPRIMIR / GUARDAR PDF</button>
     </div>
     <div id="contenedor-reporte">
         <div class="header">
             <h1>ANALIZADOR DE AMENAZAS HÍBRIDAS</h1>
-            <p>{subtitulo_filtro} | Emisión: {fecha_actual} | Fuentes Verificadas OSINT</p>
+            <p>{subtitulo_filtro} | Emisión: {fecha_actual} (Hora Peninsular) | Fuentes Verificadas OSINT</p>
         </div>"""
 
     for cat_cod, cat_nombre, cat_color in SECCIONES_INFORME:
@@ -1106,7 +1114,7 @@ def generar_html_ejecutivo(alertas, solo_48h=False):
             tit = html_module.escape(str(a.get('titular', '')))
             hecho = html_module.escape(str(a.get('hecho_reportado', '')))
             ana = html_module.escape(str(a.get('evaluacion_contexto', '')))
-            fecha_str = a.get('fecha_dt').strftime('%d/%m/%Y %H:%M')
+            fecha_str = obtener_fecha_madrid_str(a.get('fecha_dt'))
             canal = html_module.escape(str(a.get('canal', '')))
             enlace = html_module.escape(str(a.get('enlace', '#')))
 
@@ -1114,7 +1122,7 @@ def generar_html_ejecutivo(alertas, solo_48h=False):
 
             html += f"""
             <div class="card" style="border-left-color: {cat_color};">
-                <div class="meta">📅 {fecha_str} UTC | 📢 {canal}</div>
+                <div class="meta">📅 {fecha_str} | 📢 {canal}</div>
                 <h3>{tit}</h3>
                 {cuerpo_html}
                 <div class="analisis-box"><strong>Evaluación:</strong> {ana}</div>
@@ -1144,34 +1152,83 @@ def toggle_checkbox_callback(item_id):
         st.session_state.seleccionadas_pdf.discard(item_id)
 
 # ==========================================
-# ESTILOS VISUALES Y BOTONERA ADAPTATIVA
+# ESTILOS VISUALES Y CABECERA FUTURISTA
 # ==========================================
 st.markdown("""
 <style>
     .main { background-color: #0b0f19; }
-    .block-container { padding-top: 1.5rem !important; }
-    
-    .header-box {
-        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-        padding: 18px 26px;
-        border-radius: 10px;
-        border-left: 10px solid #dc2626;
-        border-bottom: 2px solid #334155;
+    .block-container { padding-top: 1.2rem !important; }
+
+    /* Cabecera Táctica Moderna */
+    .tactical-header {
+        background: linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(30, 41, 59, 0.95) 100%);
+        border: 1px solid rgba(56, 189, 248, 0.2);
+        border-left: 8px solid #dc2626;
+        border-radius: 12px;
+        padding: 18px 24px;
         margin-bottom: 16px;
         display: flex;
         align-items: center;
-        gap: 18px;
-        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+        justify-content: space-between;
+        gap: 16px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+        backdrop-filter: blur(8px);
     }
-    .header-text h1 { color: #ffffff; margin: 0; font-size: 25px !important; font-weight: 900; letter-spacing: 0.5px; text-transform: uppercase; }
-    .header-text p { color: #cbd5e1; font-size: 13.5px !important; margin: 3px 0 0 0; }
+    .header-left {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+    }
+    .header-titles h1 {
+        color: #ffffff;
+        margin: 0;
+        font-size: 24px !important;
+        font-weight: 900;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+    }
+    .header-titles p {
+        color: #94a3b8;
+        font-size: 13.5px !important;
+        margin: 4px 0 0 0;
+        font-family: monospace;
+        letter-spacing: 0.3px;
+    }
+    .system-status {
+        background: rgba(16, 185, 129, 0.12);
+        border: 1px solid rgba(16, 185, 129, 0.35);
+        border-radius: 20px;
+        padding: 6px 14px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: #34d399;
+        font-size: 11.5px;
+        font-weight: 800;
+        letter-spacing: 0.8px;
+        text-transform: uppercase;
+        font-family: monospace;
+    }
+    .pulse-dot {
+        width: 8px;
+        height: 8px;
+        background-color: #10b981;
+        border-radius: 50%;
+        box-shadow: 0 0 10px #10b981;
+        animation: pulse 1.8s infinite;
+    }
+    @keyframes pulse {
+        0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
+        70% { transform: scale(1.15); box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+        100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
+    }
 
-    /* Barra de pestañas flexible multilínea: jamás se cortan las pestañas */
+    /* Pestañas estilizadas */
     div[data-baseweb="tab-list"] {
         display: flex !important;
         flex-wrap: wrap !important;
         gap: 6px !important;
-        background-color: #0f172a !important;
+        background: #0f172a !important;
         padding: 8px 10px !important;
         border-radius: 10px !important;
         border: 1px solid #1e293b !important;
@@ -1181,45 +1238,43 @@ st.markdown("""
     button[data-baseweb="tab"] {
         flex: 1 1 auto !important;
         min-width: fit-content !important;
-        height: 36px !important;
+        height: 38px !important;
         font-size: 11.5px !important;
         font-weight: 800 !important;
-        letter-spacing: 0.3px !important;
-        padding: 6px 11px !important;
+        letter-spacing: 0.4px !important;
+        padding: 6px 12px !important;
         margin: 0 !important;
         border-radius: 6px !important;
         color: #ffffff !important;
         text-transform: uppercase;
-        border: 1px solid rgba(255,255,255,0.12) !important;
-        transition: all 0.2s ease-in-out !important;
+        border: 1px solid rgba(255,255,255,0.1) !important;
+        transition: all 0.2s ease !important;
         justify-content: center !important;
     }
 
     button[data-baseweb="tab"]:hover {
         transform: translateY(-1px) !important;
-        filter: brightness(1.15) !important;
+        filter: brightness(1.2) !important;
     }
 
-    button[data-baseweb="tab"]:nth-child(1) { background: linear-gradient(135deg, #dc2626, #b91c1c) !important; }
-    button[data-baseweb="tab"]:nth-child(2) { background: linear-gradient(135deg, #d97706, #b45309) !important; }
+    button[data-baseweb="tab"]:nth-child(1) { background: linear-gradient(135deg, #dc2626, #991b1b) !important; }
+    button[data-baseweb="tab"]:nth-child(2) { background: linear-gradient(135deg, #d97706, #92400e) !important; }
     button[data-baseweb="tab"]:nth-child(3) { background: linear-gradient(135deg, #334155, #1e293b) !important; }
     button[data-baseweb="tab"]:nth-child(4) { background: linear-gradient(135deg, #991b1b, #7f1d1d) !important; }
-    button[data-baseweb="tab"]:nth-child(5) { background: linear-gradient(135deg, #7c3aed, #6d28d9) !important; }
-    button[data-baseweb="tab"]:nth-child(6) { background: linear-gradient(135deg, #b45309, #92400e) !important; }
-    button[data-baseweb="tab"]:nth-child(7) { background: linear-gradient(135deg, #be123c, #9f1239) !important; }
-    button[data-baseweb="tab"]:nth-child(8) { background: linear-gradient(135deg, #1e3a8a, #172554) !important; }
-    button[data-baseweb="tab"]:nth-child(9) { background: linear-gradient(135deg, #0284c7, #0369a1) !important; }
-    button[data-baseweb="tab"]:nth-child(10) { background: linear-gradient(135deg, #059669, #047857) !important; }
+    button[data-baseweb="tab"]:nth-child(5) { background: linear-gradient(135deg, #7c3aed, #5b21b6) !important; }
+    button[data-baseweb="tab"]:nth-child(6) { background: linear-gradient(135deg, #b45309, #78350f) !important; }
+    button[data-baseweb="tab"]:nth-child(7) { background: linear-gradient(135deg, #be123c, #881337) !important; }
+    button[data-baseweb="tab"]:nth-child(8) { background: linear-gradient(135deg, #1e3a8a, #1e293b) !important; }
+    button[data-baseweb="tab"]:nth-child(9) { background: linear-gradient(135deg, #0284c7, #075985) !important; }
+    button[data-baseweb="tab"]:nth-child(10) { background: linear-gradient(135deg, #059669, #065f46) !important; }
 
     button[data-baseweb="tab"][aria-selected="true"] {
-        border: 2px solid #ffffff !important;
-        box-shadow: 0 0 12px rgba(255,255,255,0.45) !important;
+        border: 2px solid #38bdf8 !important;
+        box-shadow: 0 0 14px rgba(56, 189, 248, 0.5) !important;
         transform: scale(1.02) !important;
     }
 
-    div[data-baseweb="tab-highlight"] {
-        display: none !important;
-    }
+    div[data-baseweb="tab-highlight"] { display: none !important; }
 
     .osint-card {
         background-color: #ffffff; border: 1px solid #cbd5e1; border-radius: 8px;
@@ -1251,11 +1306,54 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-logo_svg = """<svg width="56" height="56" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg"><defs><radialGradient id="grad" cx="50%" cy="50%" r="50%"><stop offset="0%" style="stop-color:#1e293b;stop-opacity:1" /><stop offset="100%" style="stop-color:#0b0f19;stop-opacity:1" /></radialGradient></defs><circle cx="50" cy="50" r="48" fill="url(#grad)" stroke="#dc2626" stroke-width="3.5" /><circle cx="50" cy="50" r="38" fill="none" stroke="#38bdf8" stroke-width="1.5" stroke-dasharray="4,3" /><path d="M50 20 L73 31 V54 C73 69 50 81 50 81 C50 81 27 69 27 54 V31 Z" fill="#0f172a" stroke="#ffffff" stroke-width="2" /><polygon points="51,29 41,48 49,48 46,68 59,45 51,45" fill="#dc2626" /></svg>"""
-st.markdown(f'<div class="header-box"><div>{logo_svg}</div><div class="header-text"><h1>ANALIZADOR DE AMENAZAS HÍBRIDAS</h1><p>Monitor táctico de fuentes abiertas e inteligencia operativa</p></div></div>', unsafe_allow_html=True)
+# Logo Táctico Hexagonal con Retícula Cibernética
+logo_svg = """<svg width="60" height="60" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+        <radialGradient id="hexGrad" cx="50%" cy="50%" r="50%">
+            <stop offset="0%" style="stop-color:#1e293b;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#020617;stop-opacity:1" />
+        </radialGradient>
+        <linearGradient id="neonCyan" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#38bdf8;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#0284c7;stop-opacity:1" />
+        </linearGradient>
+        <linearGradient id="shieldRed" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" style="stop-color:#ef4444;stop-opacity:1" />
+            <stop offset="100%" style="stop-color:#991b1b;stop-opacity:1" />
+        </linearGradient>
+    </defs>
+    <!-- Anillo exterior y retícula de radar -->
+    <circle cx="50" cy="50" r="46" fill="url(#hexGrad)" stroke="#334155" stroke-width="2" />
+    <circle cx="50" cy="50" r="38" fill="none" stroke="#38bdf8" stroke-width="1.2" stroke-dasharray="3,3" opacity="0.6" />
+    <circle cx="50" cy="50" r="28" fill="none" stroke="#0ea5e9" stroke-width="1" opacity="0.4" />
+    <line x1="50" y1="4" x2="50" y2="96" stroke="#38bdf8" stroke-width="0.8" opacity="0.3" />
+    <line x1="4" y1="50" x2="96" y2="50" stroke="#38bdf8" stroke-width="0.8" opacity="0.3" />
+    <!-- Escudo Defensivo OSINT -->
+    <path d="M50 16 L74 27 V52 C74 68 50 82 50 82 C50 82 26 68 26 52 V27 Z" fill="#0f172a" stroke="url(#neonCyan)" stroke-width="2.2" />
+    <!-- Rayo de Intervención Rápida -->
+    <polygon points="52,26 38,48 48,48 44,70 60,44 50,44" fill="url(#shieldRed)" filter="drop-shadow(0 0 4px rgba(239,68,68,0.7))" />
+</svg>"""
 
+cabecera_html = f"""
+<div class="tactical-header">
+    <div class="header-left">
+        <div>{logo_svg}</div>
+        <div class="header-titles">
+            <h1>ANALIZADOR DE AMENAZAS HÍBRIDAS</h1>
+            <p>SISTEMA OPERATIVO DE VIGILANCIA EN FUENTES ABIERTAS // SECTOR ESPAÑA-GLOBAL</p>
+        </div>
+    </div>
+    <div class="system-status">
+        <div class="pulse-dot"></div>
+        <span>SISTEMA EN LÍNEA</span>
+    </div>
+</div>
+"""
+st.markdown(cabecera_html, unsafe_allow_html=True)
+
+# Sincronización inicial
 if "arranque_inicial_ok" not in st.session_state:
-    with st.spinner("Sincronizando fuentes de inteligencia en tiempo real..."):
+    with st.spinner("Sincronizando fuentes abiertas en tiempo real..."):
         ejecutar_actualizacion_total()
     st.session_state.arranque_inicial_ok = True
     st.rerun()
@@ -1281,7 +1379,7 @@ with st.sidebar:
     st.download_button(
         "📊 DESCARGAR BASE DE DATOS (CSV)",
         data=csv_bytes,
-        file_name=f"alertas_osint_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+        file_name=f"alertas_osint_{datetime.now(ZONA_MADRID).strftime('%Y%m%d_%H%M')}.csv",
         mime="text/csv",
         use_container_width=True
     )
@@ -1305,7 +1403,7 @@ col_btn1, col_btn2, col_filtro, col_info = st.columns([1.2, 1.4, 1.1, 1.5])
 
 with col_btn1:
     if st.button("🔄 ACTUALIZAR FUENTES", type="primary", use_container_width=True):
-        with st.spinner("Buscando en fuentes..."):
+        with st.spinner("Sincronizando fuentes abiertas en tiempo real..."):
             ejecutar_actualizacion_total()
         st.rerun()
 
@@ -1320,14 +1418,14 @@ with col_btn2:
         st.download_button(
             f"📥 INFORME EJECUTIVO ({len(alertas_para_informe)}/{len(datos_activos)})",
             data=generar_html_ejecutivo(alertas_para_informe, solo_48h=solo_48h),
-            file_name=f"Informe_Amenazas_{'48h_' if solo_48h else 'general_'}{datetime.now().strftime('%Y%m%d_%H%M')}.html",
+            file_name=f"Informe_Amenazas_{'48h_' if solo_48h else 'general_'}{datetime.now(ZONA_MADRID).strftime('%Y%m%d_%H%M')}.html",
             mime="text/html",
             use_container_width=True
         )
 
 with col_info:
     if "ultima_actualizacion" in st.session_state:
-        st.markdown(f'<div style="font-size:12.5px;color:#94a3b8;margin-top:6px;">🕒 <strong>Última sincronización:</strong> {st.session_state.ultima_actualizacion}<br>Mostrando <strong>{len(datos_activos)}</strong> alertas filtradas.</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:12.5px;color:#94a3b8;margin-top:6px;">🕒 <strong>Última sincronización:</strong> {st.session_state.ultima_actualizacion} (Madrid)<br>Mostrando <strong>{len(datos_activos)}</strong> alertas filtradas.</div>', unsafe_allow_html=True)
 
 ids_visibles = [x["id"] for x in datos_activos]
 c_sel1, c_sel2, _ = st.columns([1.2, 1.2, 4.0])
@@ -1341,7 +1439,7 @@ with c_sel2:
 st.write("")
 
 # ==========================================
-# RENDERIZADO DE ALERTAS
+# RENDERIZADO DE TARJETAS
 # ==========================================
 def renderizar_tarjetas(lista_items):
     if not lista_items:
@@ -1372,7 +1470,7 @@ def renderizar_tarjetas(lista_items):
             sep = 'margin-left:6px;' if badges else ''
             badges += f'<span class="badge-item" style="background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;{sep}">🔄 DIFUNDIDO EN {len(correlacionados)} FUENTES</span>'
 
-        fecha_str = item.get("fecha_dt").strftime("%d/%m/%Y %H:%M")
+        fecha_str = obtener_fecha_madrid_str(item.get("fecha_dt"))
         t_safe = html_module.escape(str(item.get("titular", "")))
         h_safe = html_module.escape(str(item.get("hecho_reportado", "")))
         a_safe = html_module.escape(str(item.get("evaluacion_contexto", "")))
@@ -1386,7 +1484,7 @@ def renderizar_tarjetas(lista_items):
 
         bloque_reporte = f'<div class="osint-resumen"><strong>📄 Reporte/Post:</strong><br>{h_safe}</div>' if cat in ["TELEGRAM", "REDES"] else ""
 
-        badge_header = f'<div style="margin-bottom:8px;">{badges}<span style="font-size:12px;color:#64748b;margin-left:8px;">📅 {fecha_str} UTC | 📢 {canal_safe}</span></div>' if badges else f'<div style="margin-bottom:8px;"><span style="font-size:12px;color:#64748b;">📅 {fecha_str} UTC | 📢 {canal_safe}</span></div>'
+        badge_header = f'<div style="margin-bottom:8px;">{badges}<span style="font-size:12px;color:#64748b;margin-left:8px;">📅 {fecha_str} | 📢 {canal_safe}</span></div>' if badges else f'<div style="margin-bottom:8px;"><span style="font-size:12px;color:#64748b;">📅 {fecha_str} | 📢 {canal_safe}</span></div>'
 
         tarjeta_html = (
             f'<div class="osint-card" style="border-left: 8px solid {b_color};">'
@@ -1420,7 +1518,7 @@ def renderizar_tarjetas(lista_items):
             st.markdown(tarjeta_html, unsafe_allow_html=True)
 
 # ==========================================
-# PESTAÑAS (ORDEN OPERATIVO EXACTO)
+# PESTAÑAS (10 SECCIONES CON BOTONERA ADAPTATIVA)
 # ==========================================
 if "alertas_monitor" in st.session_state:
     l_esp = [x for x in datos_activos if x.get("categoria") == "ESPANA"]
