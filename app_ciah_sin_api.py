@@ -1,22 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
-import requests
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
-import xml.etree.ElementTree as ET
-from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
-from bs4 import BeautifulSoup
-import re
-import html as html_module
-import hashlib
-from email.utils import parsedate_to_datetime
-import unicodedata
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
-from difflib import SequenceMatcher
-from urllib.parse import urlparse, urlunparse
-import pandas as pd
 
 # ==========================================
 # 1. CONFIGURACIÓN STREAMLIT & CONTROL ACCESO
@@ -27,15 +9,6 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
-
-ZONA_MADRID = ZoneInfo("Europe/Madrid")
-
-def obtener_fecha_madrid_str(dt=None):
-    if dt is None:
-        dt = datetime.now(timezone.utc)
-    elif dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(ZONA_MADRID).strftime("%d/%m/%Y %H:%M:%S")
 
 # Blindaje visual CSS
 st.markdown("""
@@ -85,6 +58,32 @@ if not gestionar_acceso():
 # ==========================================
 # 2. CLIENTE HTTP Y CACHÉ PERSISTENTE
 # ==========================================
+import requests
+from requests.adapters import HTTPAdapter
+import xml.etree.ElementTree as ET
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+from bs4 import BeautifulSoup
+import re
+import html as html_module
+import hashlib
+from email.utils import parsedate_to_datetime
+import unicodedata
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+from difflib import SequenceMatcher
+from urllib.parse import urlparse, urlunparse
+import pandas as pd
+
+ZONA_MADRID = ZoneInfo("Europe/Madrid")
+
+def obtener_fecha_madrid_str(dt=None):
+    if dt is None:
+        dt = datetime.now(timezone.utc)
+    elif dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(ZONA_MADRID).strftime("%d/%m/%Y %H:%M:%S")
+
 @st.cache_resource
 def get_sesion_http():
     sesion = requests.Session()
@@ -274,7 +273,7 @@ def obtener_contexto_fuente(categoria, canal=""):
     return contextos.get(categoria, "Información operativa de fuentes abiertas sobre el conflicto.")
 
 # ==========================================
-# 6. TRADUCCIÓN THREAD-SAFE CON PERSISTENCIA
+# 6. TRADUCCIÓN INDIVIDUAL BAJO DEMANDA
 # ==========================================
 def traducir_texto(texto_orig):
     if not texto_orig: return ""
@@ -292,9 +291,9 @@ def traducir_texto(texto_orig):
         medio_suffix = m_medio.group(1)
         texto_a_traducir = t_clean[:m_medio.start()].strip()
 
-    params = {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:450]}
+    params = {"client": "gtx", "sl": "auto", "tl": "es", "dt": "t", "q": texto_a_traducir[:500]}
     try:
-        r = SESION_HTTP.get("https://translate.googleapis.com/translate_a/single", params=params, timeout=2.2)
+        r = SESION_HTTP.get("https://translate.googleapis.com/translate_a/single", params=params, timeout=2.5)
         if r.status_code == 200:
             data = r.json()
             if isinstance(data, list) and len(data) > 0 and isinstance(data[0], list):
@@ -310,10 +309,6 @@ def traducir_texto(texto_orig):
 
     return t_clean
 
-def traducir_lote(lista_textos):
-    with ThreadPoolExecutor(max_workers=20) as ex:
-        return list(ex.map(traducir_texto, lista_textos))
-
 # ==========================================
 # 7. PARSER BOOLEANO MULTILINGÜE
 # ==========================================
@@ -321,7 +316,7 @@ def cumple_busqueda_booleana(item, query_str):
     if not query_str or not query_str.strip():
         return True
 
-    corpus = f"{item.get('titular_traducido','')} {item.get('titular_original','')} {item.get('cuerpo_traducido','')} {item.get('cuerpo_original','')}"
+    corpus = f"{item.get('titular_traducido','')} {item.get('titular_raw','')} {item.get('cuerpo_traducido','')} {item.get('cuerpo_raw','')}"
     t_norm = normalizar_texto(corpus)
     q_raw = query_str.strip()
 
@@ -352,11 +347,10 @@ def cumple_busqueda_booleana(item, query_str):
 # ==========================================
 def procesar_feed_rss(url, etiqueta):
     items = []
-    err = None
     try:
         r = SESION_HTTP.get(url, timeout=3.0)
         if r.status_code != 200:
-            return [], f"{etiqueta} (HTTP {r.status_code})"
+            return []
         root = ET.fromstring(r.content)
         entradas = root.findall(".//item")
         es_atom = False
@@ -394,17 +388,16 @@ def procesar_feed_rss(url, etiqueta):
                 "fecha_dt": dt, "titular_raw": limpiar_firma_medio(tit), "cuerpo_raw": desc[:1500],
                 "enlace": link, "multimedia": None, "tiene_video": False
             })
-    except Exception as e:
-        err = f"{etiqueta} ({type(e).__name__})"
-    return items, err
+    except Exception:
+        pass
+    return items
 
 def raspar_canal_tg(canal):
     mensajes = []
-    err = None
     try:
         r = SESION_HTTP.get(f"https://t.me/s/{canal}", timeout=3.0)
         if r.status_code != 200:
-            return [], f"Telegram @{canal} (HTTP {r.status_code})"
+            return []
         soup = BeautifulSoup(r.text, "html.parser")
         for p in soup.find_all("div", class_="tgme_widget_message_wrap")[-40:]:
             time_tag = p.find("time")
@@ -451,13 +444,12 @@ def raspar_canal_tg(canal):
                 "fecha_dt": dt, "titular_raw": tit_corto, "cuerpo_raw": texto_sin_urls[:2200],
                 "enlace": link, "multimedia": foto_url, "tiene_video": tiene_video
             })
-    except Exception as e:
-        err = f"Telegram @{canal} ({type(e).__name__})"
-    return mensajes, err
+    except Exception:
+        pass
+    return mensajes
 
 def raspar_youtube(canal_id, etiqueta):
     items = []
-    err = None
     try:
         r = SESION_HTTP.get(f"https://www.youtube.com/feeds/videos.xml?channel_id={canal_id}", timeout=2.5)
         if r.status_code == 200:
@@ -478,11 +470,9 @@ def raspar_youtube(canal_id, etiqueta):
                     "fecha_dt": dt, "titular_raw": tit, "cuerpo_raw": desc[:1000],
                     "enlace": link, "multimedia": None, "tiene_video": True
                 })
-        else:
-            err = f"{etiqueta} (HTTP {r.status_code})"
-    except Exception as e:
-        err = f"{etiqueta} ({type(e).__name__})"
-    return items, err
+    except Exception:
+        pass
+    return items
 
 # ==========================================
 # 9. BANCO COMPLETO DE FUENTES OSINT
@@ -541,7 +531,6 @@ def cargar_todas_las_fuentes():
     ]
 
     todos_brutos = []
-    errores = []
 
     with ThreadPoolExecutor(max_workers=32) as ex:
         f_tg = [ex.submit(raspar_canal_tg, c) for c in canales_tg]
@@ -550,9 +539,8 @@ def cargar_todas_las_fuentes():
 
         for f in as_completed(f_tg + f_yt + f_rss):
             try:
-                res, err = f.result()
+                res = f.result()
                 todos_brutos.extend(res)
-                if err: errores.append(err)
             except Exception:
                 pass
 
@@ -583,36 +571,24 @@ def cargar_todas_las_fuentes():
         b.setdefault("fuentes_coincidentes", [])
         unicos.append(b)
 
-    return unicos, errores
+    return unicos
 
 # ==========================================
 # 10. INTERFAZ Y RENDERIZADO
 # ==========================================
 if "alertas_base" not in st.session_state:
     with st.spinner("Sincronizando fuentes abiertas..."):
-        unicos, errores = cargar_todas_las_fuentes()
+        unicos = cargar_todas_las_fuentes()
         for item in unicos:
             cat = categorizar_alerta(item["titular_raw"], item["cuerpo_raw"], item["plataforma"], item["canal"])
             item["categoria"] = cat
             item["evaluacion_contexto"] = obtener_contexto_fuente(cat, item["canal"])
-            item["titular_traducido"] = item["titular_raw"]
-            item["cuerpo_traducido"] = item["cuerpo_raw"]
+            item["titular_traducido"] = ""
+            item["cuerpo_traducido"] = ""
             item["traducido_ok"] = False
         st.session_state.alertas_base = unicos
-        st.session_state.errores_fuentes = errores
         st.session_state.ultima_actualizacion = obtener_fecha_madrid_str()
         st.session_state.seleccionadas_pdf = {a["id"] for a in unicos}
-
-# Inyección del widget nativo de traducción web (Google Translate)
-components.html("""
-<div id="google_translate_element" style="float: right; margin-bottom: 5px;"></div>
-<script type="text/javascript">
-function googleTranslateElementInit() {
-  new google.translate.TranslateElement({pageLanguage: 'auto', includedLanguages: 'es', layout: google.translate.TranslateElement.InlineLayout.SIMPLE}, 'google_translate_element');
-}
-</script>
-<script type="text/javascript" src="//translate.google.com/translate.a/element.js?cb=googleTranslateElementInit"></script>
-""", height=40)
 
 st.markdown("""
 <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); border-left: 8px solid #dc2626; border-radius: 10px; padding: 16px 22px; margin-bottom: 14px;">
@@ -622,28 +598,15 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 with st.container():
-    c_flt1, c_flt2, c_flt3, c_flt4 = st.columns([1.6, 1.2, 1.2, 0.9])
+    c_flt1, c_flt2, c_flt3 = st.columns([1.8, 1.2, 1.2])
     with c_flt1:
         busqueda_txt = st.text_input("🔍 Búsqueda Booleana (multilingüe):", placeholder='Ej: "flota fantasma" OR sabotaje -incendio')
     with c_flt2:
         rango_tiempo = st.selectbox("📅 Ventana Temporal:", ["Últimas 24 Horas", "Últimas 48 Horas", "Última Semana", "Histórico Completo"], index=3)
     with c_flt3:
         canales_sel = st.multiselect("Filtrar por Canal:", sorted(list({a["canal"] for a in st.session_state.alertas_base})))
-    with c_flt4:
-        auto_traducir = st.checkbox("🌐 Auto-Traducir", value=True, help="Traduce automáticamente los titulares y despachos al español")
 
-if auto_traducir:
-    pendientes = [a for a in st.session_state.alertas_base if not a.get("traducido_ok")]
-    if pendientes:
-        with st.spinner(f"Traduciendo alertas al castellano..."):
-            tits = traducir_lote([a["titular_raw"] for a in pendientes])
-            cuerpos = traducir_lote([a["cuerpo_raw"][:400] for a in pendientes])
-            for a, t_trad, c_trad in zip(pendientes, tits, cuerpos):
-                a["titular_traducido"] = t_trad
-                a["cuerpo_traducido"] = c_trad
-                a["traducido_ok"] = True
-
-# Filtrado reactivo
+# Filtrado reactivo en memoria
 alertas_visibles = st.session_state.alertas_base
 
 if rango_tiempo == "Últimas 24 Horas":
@@ -673,8 +636,9 @@ with c_btn2:
     <body style='font-family:sans-serif;padding:20px;'><h1>INFORME DE SITUACIÓN // AMENAZAS HÍBRIDAS</h1>
     <p>Emisión: {obtener_fecha_madrid_str()} | Ventana: {rango_tiempo}</p><hr>"""
     for a in alertas_informe:
+        tit_exp = a['titular_traducido'] if a.get('traducido_ok') else a['titular_raw']
         html_reporte += f"<div style='border-bottom:1px solid #ccc;padding:10px 0;'>"
-        html_reporte += f"<h3>{html_module.escape(a['titular_traducido'] if auto_traducir else a['titular_raw'])}</h3>"
+        html_reporte += f"<h3>{html_module.escape(tit_exp)}</h3>"
         html_reporte += f"<p><strong>Fuente:</strong> {html_module.escape(a['canal'])} | <strong>Contexto:</strong> {html_module.escape(a['evaluacion_contexto'])}</p>"
         html_reporte += f"<p><a href='{url_sanitizada(a['enlace'])}' target='_blank'>Enlace a la fuente</a></p></div>"
     html_reporte += "</body></html>"
@@ -690,8 +654,8 @@ with c_btn2:
 with c_btn3:
     md_reporte = f"# INFORME DE INTELIGENCIA\n**Emisión:** {obtener_fecha_madrid_str()}\n\n---\n\n"
     for a in alertas_informe:
-        tit = a['titular_traducido'] if auto_traducir else a['titular_raw']
-        md_reporte += f"### {tit}\n- **Fuente:** {a['canal']}\n- **Contexto:** {a['evaluacion_contexto']}\n- **Enlace:** {a['enlace']}\n\n"
+        tit_exp = a['titular_traducido'] if a.get('traducido_ok') else a['titular_raw']
+        md_reporte += f"### {tit_exp}\n- **Fuente:** {a['canal']}\n- **Contexto:** {a['evaluacion_contexto']}\n- **Enlace:** {a['enlace']}\n\n"
 
     st.download_button(
         f"📝 INFORME MD ({len(alertas_informe)})",
@@ -703,11 +667,6 @@ with c_btn3:
 
 with c_btn4:
     st.markdown(f'<div style="font-size:12px;color:#94a3b8;margin-top:6px;">🕒 Sincronizado: {st.session_state.ultima_actualizacion}<br>Mostrando <strong>{len(alertas_visibles)}</strong> alertas.</div>', unsafe_allow_html=True)
-
-if st.session_state.errores_fuentes:
-    with st.expander(f"⚠️ Diagnóstico de Conexión ({len(st.session_state.errores_fuentes)} incidencias)"):
-        for err in sorted(set(st.session_state.errores_fuentes)):
-            st.caption(f"• {err}")
 
 col_s1, col_s2, _ = st.columns([1.2, 1.2, 4.0])
 with col_s1:
@@ -722,7 +681,7 @@ with col_s2:
 st.write("")
 
 # ==========================================
-# 11. RENDERIZADO CON FOTOS Y TEXTO RECUPERADOS
+# 11. RENDERIZADO CON TRADUCCIÓN INDIVIDUAL
 # ==========================================
 def renderizar_tarjetas(lista_items):
     if not lista_items:
@@ -737,22 +696,29 @@ def renderizar_tarjetas(lista_items):
             "DETENCION": "#be123c", "CHINA": "#1e3a8a", "TELEGRAM": "#0284c7", "REDES": "#059669"
         }.get(cat, "#0f172a")
 
-        titular_mostrar = item["titular_traducido"] if auto_traducir else item["titular_raw"]
-        cuerpo_mostrar = item["cuerpo_traducido"] if auto_traducir else item["cuerpo_raw"]
+        esta_traducido = item.get("traducido_ok", False)
+        titular_mostrar = item["titular_traducido"] if esta_traducido else item["titular_raw"]
+        cuerpo_mostrar = item["cuerpo_traducido"] if esta_traducido else item["cuerpo_raw"]
+
         enlace_seguro = url_sanitizada(item.get("enlace", ""))
         fecha_str = obtener_fecha_madrid_str(item["fecha_dt"]) if item["fecha_dt"] else "Fecha reciente"
 
-        # Recuperación de elementos visuales (Foto y Reporte completo)
-        media_html = f"""<div style="flex: 0 0 280px; max-width: 280px; margin-right: 18px;">
-            <img src="{html_module.escape(item['multimedia'])}" style="width: 100%; border-radius: 6px; max-height: 220px; object-fit: cover;" />
-        </div>""" if item.get("multimedia") and es_url_segura(item["multimedia"]) else ""
+        # Foto lateral
+        media_html = ""
+        if item.get("multimedia") and es_url_segura(item["multimedia"]):
+            media_html = f"""<div style="flex: 0 0 260px; max-width: 260px; margin-right: 18px;">
+                <img src="{html_module.escape(item['multimedia'])}" style="width: 100%; border-radius: 6px; max-height: 220px; object-fit: cover;" />
+            </div>"""
 
-        bloque_reporte = f"""<div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 14px; color: #1e293b; font-size: 13.5px; line-height: 1.55; text-align: justify; margin-bottom: 8px;">
-            <strong>📄 Reporte / Post:</strong><br>{html_module.escape(cuerpo_mostrar)}
-        </div>""" if cat in ["TELEGRAM", "REDES"] else ""
+        # Bloque Reporte / Post
+        bloque_reporte = ""
+        if cat in ["TELEGRAM", "REDES"]:
+            bloque_reporte = f"""<div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 14px; color: #1e293b; font-size: 13.5px; line-height: 1.55; text-align: justify; margin-bottom: 8px;">
+                <strong>📄 Reporte / Post:</strong><br>{html_module.escape(cuerpo_mostrar)}
+            </div>"""
 
         html_card = f"""
-        <div style="background:#ffffff; border:1px solid #cbd5e1; border-left:7px solid {b_color}; border-radius:8px; padding:14px 18px; margin-bottom:12px;">
+        <div style="background:#ffffff; border:1px solid #cbd5e1; border-left:7px solid {b_color}; border-radius:8px; padding:14px 18px; margin-bottom:8px;">
             <div style="display: flex; flex-wrap: wrap; align-items: flex-start;">
                 {media_html}
                 <div style="flex: 1; min-width: 260px;">
@@ -768,13 +734,28 @@ def renderizar_tarjetas(lista_items):
         </div>
         """
 
-        col_chk, col_content = st.columns([0.05, 0.95])
+        col_chk, col_content = st.columns([0.04, 0.96])
         with col_chk:
             st.checkbox("Sel", key=f"sel_{item['id']}", label_visibility="collapsed")
         with col_content:
             st.markdown(html_card, unsafe_allow_html=True)
-            with st.expander("📋 Desplegar alerta traducida para copiar"):
-                texto_copia = f"🚨 ALERTA OSINT | {cat}\nTitular: {titular_mostrar}\nReporte: {cuerpo_mostrar[:250]}...\nFuente: {item['canal']} | Fecha: {fecha_str}\nEnlace: {item.get('enlace','')}"
+            
+            # Botón de traducción bajo demanda para esta alerta específica
+            c_tr, c_cp = st.columns([0.22, 0.78])
+            with c_tr:
+                if not esta_traducido:
+                    if st.button("🌐 TRADUCIR ALERTA", key=f"btn_tr_{item['id']}", use_container_width=True):
+                        with st.spinner("Traduciendo..."):
+                            item["titular_traducido"] = traducir_texto(item["titular_raw"])
+                            item["cuerpo_traducido"] = traducir_texto(item["cuerpo_raw"][:800])
+                            item["traducido_ok"] = True
+                        st.rerun()
+                else:
+                    st.caption("✅ Traducida al español")
+
+            # Desplegable para copiar alerta
+            with st.expander("📋 Formato de alerta para copiar"):
+                texto_copia = f"🚨 ALERTA OSINT | {cat}\nTitular: {titular_mostrar}\nReporte: {cuerpo_mostrar[:300]}...\nFuente: {item['canal']} | Fecha: {fecha_str}\nEnlace: {item.get('enlace','')}"
                 st.code(texto_copia, language="markdown")
 
             if item.get("fuentes_coincidentes"):
