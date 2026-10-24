@@ -10,7 +10,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Blindaje visual CSS
+# Blindaje visual CSS limpio
 st.markdown("""
 <style>
     #MainMenu, footer { visibility: hidden !important; display: none !important; height: 0px !important; }
@@ -21,6 +21,24 @@ st.markdown("""
         visibility: hidden !important; display: none !important; opacity: 0 !important; pointer-events: none !important;
     }
     .main { background-color: #0b0f19; }
+    
+    /* Contenedor flotante superior para el traductor de Google */
+    .gad-translate-bar {
+        position: fixed;
+        top: 8px;
+        right: 18px;
+        z-index: 999999;
+        background: rgba(15, 23, 42, 0.95);
+        border: 1px solid #38bdf8;
+        border-radius: 6px;
+        padding: 4px 10px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+    }
+    .goog-te-banner-frame.skiptranslate { display: none !important; }
+    body { top: 0px !important; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -56,9 +74,8 @@ if not gestionar_acceso():
     st.stop()
 
 # ==========================================
-# 2. CLIENTE HTTP Y CACHÉ PERSISTENTE
+# 2. CLIENTE HTTP Y CONFIGURACIÓN
 # ==========================================
-import streamlit.components.v1 as components
 import requests
 from requests.adapters import HTTPAdapter
 import xml.etree.ElementTree as ET
@@ -71,7 +88,6 @@ import hashlib
 from email.utils import parsedate_to_datetime
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import threading
 from difflib import SequenceMatcher
 from urllib.parse import urlparse, urlunparse
 import pandas as pd
@@ -97,15 +113,10 @@ def get_sesion_http():
     })
     return sesion
 
-@st.cache_resource
-def get_traducciones_cache():
-    return {}, threading.Lock()
-
 SESION_HTTP = get_sesion_http()
-CACHE_TRADUCCIONES, CACHE_LOCK = get_traducciones_cache()
 
 # ==========================================
-# 3. MATRICES Y REGEX OPERATIVAS
+# 3. MATRICES DE INTELIGENCIA Y REGEX
 # ==========================================
 CANALES_DESINFORMACION_ESP = {
     "musicarusaesp", "Irinamar_Z", "eurekapress", "elOJOen", "ophiucu", "ASupersharij"
@@ -134,13 +145,15 @@ PATRON_ACTORES = re.compile(
     r')\b', re.IGNORECASE
 )
 
+# Vectores estrictos: incluye boicot electoral, sabotajes marítimos/cables y guerra híbrida
 PATRON_VECTORES = re.compile(
     r'\b('
     r'hibrid\w*|hybrid\w*|sabotaj\w*|sabotage\w*|saboteador\w*|espia\w*|espionaje|spy\w*|espionage|spying|'
     r'ciberataque\w*|ciberespionaje|ciberdefensa|cyberattack\w*|ransomware|ddos|malware|infiltracion|apt\d+|'
-    r'desinformacion|disinformation|fimi|doppelganger|propaganda|injerencia|'
+    r'desinformacion|disinformation|fimi|doppelganger|propaganda|injerencia\w*|injerencia electoral|boicot electoral|'
+    r'elecciones.*rus\w*|interferencia.*eleccion\w*|manipulacion informativa|campana de influencia|'
     r'sancion\w*|sanction\w*|elusion\w*|evasion\w*|flota fantasma|shadow fleet|petrolero clandestino|dark fleet|'
-    r'cable submarino|undersea cable|red ferroviaria sabot\w*|paquete incendiario|incendio provocado|arson|'
+    r'cable submarino|undersea cable|red ferroviaria sabot\w*|infraestructura critica|paquete incendiario|incendio provocado|arson|'
     r'crimen de guerra|war crime\w*|cpi|icc|genocidio|fosa comun|tortura\w*|'
     r'detenido por espionaje|arrestado por sabotaje|detencion de espia|zatrzymany|festnahme|detained|arrested|'
     r'dron kamikaze|shahed|geran|uav militar|jamming|guerra electronica|electronic warfare|misil\w*|bombardeo|ofensiva|'
@@ -204,13 +217,14 @@ def es_relevante(texto, canal):
     if not texto: return False
     canal_l = canal.lower()
     
+    # Canales tácticos e inteligencia prefiltrados
     if any(k in canal_l for k in ["sbu", "gur", "rybar", "sharij", "informnapalm", "bellingcat", "insider", "occrp", "euvsdisinfo", "generalstaff"]):
         return True
 
     t_norm = normalizar_texto(texto)
     t_raw = str(texto)
 
-    # Excluir temas no relacionados
+    # Exclusiones de política general no relacionada con amenazas híbridas
     if re.search(r'\b(marruecos|ceuta|melilla|pateras|inmigracion irregular|vaticano|santa sede|papa francisco|liga de futbol|champions|supermercado|receta)\b', t_norm):
         if not re.search(r'\b(rusia|ruso|kremlin|china|ciberataque|sabotaje|espionaje|fimi|pegasus)\b', t_norm):
             return False
@@ -229,14 +243,16 @@ def categorizar_alerta(titular, cuerpo, plat, canal):
     
     t_all = normalizar_texto(f"{titular} {cuerpo}")
     
-    # 1. España e infraestructuras críticas
-    if re.search(r'\b(espana|espanol\w*|madrid|barcelona|cartagena|\brota\b|torrejon|cni|dsn|incibe|ccn-cert|margarita robles)\b', t_all):
-        if bool(PATRON_ACTORES.search(t_all)) or bool(PATRON_VECTORES.search(t_all)):
+    # 1. España e infraestructuras críticas (incluye injerencia electoral y sabotaje OTAN España-Francia)
+    if re.search(r'\b(espana|espanol\w*|madrid|barcelona|cartagena|\brota\b|torrejon|cni|dsn|incibe|ccn-cert|margarita robles|elecciones.*rus\w*|boicot.*eleccion\w*)\b', t_all):
+        if bool(PATRON_ACTORES.search(t_all)) or bool(PATRON_VECTORES.search(t_all)) or "otan" in t_all or "sabotaje" in t_all:
             return "ESPANA"
     
-    # 2. Empresas de defensa estratégicas
-    if any(re.search(r'\b' + re.escape(emp) + r'\b', t_all) for emp in EMPRESAS_ESTRATEGICAS_ESP):
-        return "EMPRESA"
+    # 2. Empresas estratégicas de defensa (EXIGE que haya vector hostil para no meter huelgas o finanzas)
+    menciona_empresa = any(re.search(r'\b' + re.escape(emp) + r'\b', t_all) for emp in EMPRESAS_ESTRATEGICAS_ESP)
+    if menciona_empresa:
+        if bool(PATRON_VECTORES.search(t_all)) or bool(PATRON_ACTORES.search(t_all)) or re.search(r'\b(defensa|armamento|militar|contrato militar|ciberseguridad)\b', t_all):
+            return "EMPRESA"
         
     # 3. Detenciones por espionaje/sabotaje
     if re.search(r'\b(detenido\w*|arrestado\w*|detencion\w*|arresto\w*|zatrzymany|festnahme|detained|arrested)\b', t_all):
@@ -270,8 +286,8 @@ def obtener_contexto_fuente(categoria, canal=""):
     if any(k in c for k in ["stratcom", "euvsdisinfo", "dfrlab"]): return "Registro institucional de desinformación e injerencia extranjera."
     
     contextos = {
-        "ESPANA": "Impacto directo en la seguridad nacional o infraestructuras de España.",
-        "EMPRESA": "Seguimiento corporativo: sector defensa y contratos estratégicos.",
+        "ESPANA": "Impacto directo en seguridad nacional, elecciones o infraestructuras críticas de España.",
+        "EMPRESA": "Seguimiento corporativo: sector defensa, contratos militares y amenazas industriales.",
         "DETENCION": "Operación policial o judicial contra redes de espionaje o sabotaje.",
         "SANCIONES": "Vigilancia de elusión de sanciones comerciales, financieras o flota fantasma.",
         "CRIPTO": "Inteligencia financiera (FININT): trazabilidad de transferencias ilícitas.",
@@ -445,7 +461,7 @@ def raspar_youtube(canal_id, etiqueta):
     return items
 
 # ==========================================
-# 8. BANCO COMPLETO DE FUENTES OSINT
+# 8. BANCO COMPLETO DE FUENTES OSINT GLOBALES
 # ==========================================
 @st.cache_data(ttl=600, show_spinner=False)
 def cargar_todas_las_fuentes():
@@ -466,39 +482,60 @@ def cargar_todas_las_fuentes():
         ("UC7_2eFfP_n5v3H_Z_L-v_4w", "YouTube: Bellingcat OSINT")
     ]
 
+    # Búsquedas precisas de inteligencia sobre OTAN, sabotajes y elecciones
     fuentes_rss = [
+        # España: Elecciones, boicot ruso, cables submarinos y OTAN
+        ("https://news.google.com/rss/search?q=(España+OR+Madrid)+(injerencia+OR+boicot+OR+elecciones)+(Rusia+OR+Kremlin+OR+ciberataque)&hl=es&gl=ES&ceid=ES:es", "España Injerencia Electoral"),
+        ("https://news.google.com/rss/search?q=(OTAN+OR+NATO)+(sabotaje+OR+\"cables+submarinos\"+OR+\"infraestructura+crítica\")+(España+OR+Francia)&hl=es&gl=ES&ceid=ES:es", "OTAN Sabotaje ES-FR"),
         ("https://news.google.com/rss/search?q=(DSN+OR+\"Seguridad+Nacional\")+(sabotaje+OR+ciberataque+OR+espionaje+OR+híbridas)&hl=es&gl=ES&ceid=ES:es", "DSN Amenazas (ES)"),
+        ("https://news.google.com/rss/search?q=(CNI+OR+\"Guardia+Civil\"+OR+\"Policia+Nacional\")+(sabotaje+OR+espia+OR+ciberataque+OR+GRU)&hl=es&gl=ES&ceid=ES:es", "España Seguridad (ES)"),
+        ("https://news.google.com/rss/search?q=(detenido+OR+arrestado)+(espia+ruso+OR+espia+chino+OR+sabotaje)&hl=es&gl=ES&ceid=ES:es", "Detenciones (ES)"),
+        ("https://news.google.com/rss/search?q=(\"empresas+amenazadas+por+rusia\"+OR+Tecnobit+OR+Destinus+OR+Indra+OR+Navantia+OR+Escribano)&hl=es&gl=ES&ceid=ES:es", "Empresas Defensa (ES)"),
+        ("https://theobjective.com/feed/", "The Objective (ES)"),
+
+        # Cobertura OTAN, UE y Militar Internacional
+        ("https://news.google.com/rss/search?q=NATO+(sabotage+OR+\"undersea+cables\"+OR+\"hybrid+threats\")+Europe&hl=en-US&gl=US&ceid=US:en", "NATO Hybrid Threats (EN)"),
         ("https://news.google.com/rss/search?q=(\"Consilium\"+OR+\"Council+of+the+EU\")+(hybrid+OR+sabotage+OR+sanctions)&hl=en-US&gl=US&ceid=US:en", "Consilium UE (EN)"),
         ("https://news.google.com/rss/search?q=(\"NATO+StratCom\"+OR+\"StratCom+COE\")+disinformation&hl=en-US&gl=US&ceid=US:en", "NATO StratCom (EN)"),
         ("https://news.google.com/rss/search?q=Europol+(hybrid+OR+sabotage+OR+\"organized+crime\")+Russia&hl=en-US&gl=US&ceid=US:en", "Europol (EN)"),
         ("https://news.google.com/rss/search?q=Eurojust+(\"cross-border\"+OR+sanctions+OR+investigation)&hl=en-US&gl=US&ceid=US:en", "Eurojust (EN)"),
+
+        # Desinformación, FIMI e Investigaciones Técnicas
         ("https://euvsdisinfo.eu/feed/", "EUvsDisinfo (EN)"),
         ("https://www.disinfo.eu/feed/", "EU DisinfoLab (EN)"),
         ("https://citizenlab.ca/feed/", "Citizen Lab (EN)"),
         ("https://chinadigitaltimes.net/feed/", "China Digital Times (EN/ZH)"),
         ("https://news.google.com/rss/search?q=(\"EEAS\"+OR+\"FIMI\"+OR+\"Doppelganger\")+disinformation&hl=en-US&gl=US&ceid=US:en", "EEAS FIMI (EN)"),
+
+        # Investigaciones OSINT y Crimen Organizado
         ("https://www.bellingcat.com/feed/", "Bellingcat OSINT (EN)"),
         ("https://theins.ru/feed", "The Insider (RU/EN)"),
         ("https://www.occrp.org/en/feed", "OCCRP (EN)"),
         ("https://news.google.com/rss/search?q=(\"RUSI\"+OR+\"CSIS\")+sabotage+Europe&hl=en-US&gl=US&ceid=US:en", "RUSI / CSIS (EN)"),
         ("https://www.rumafia.net/en/rss/", "RuMafia (EN)"),
         ("https://antikor.com.ua/articles.rss", "Antikor Portal (UA)"),
-        ("https://news.google.com/rss/search?q=(\"empresas+amenazadas+por+rusia\"+OR+Tecnobit+OR+Destinus+OR+Indra+OR+Navantia+OR+Escribano)&hl=es&gl=ES&ceid=ES:es", "Empresas Defensa (ES)"),
-        ("https://news.google.com/rss/search?q=(CNI+OR+\"Guardia+Civil\"+OR+\"Policia+Nacional\")+(sabotaje+OR+espia+OR+ciberataque+OR+GRU)&hl=es&gl=ES&ceid=ES:es", "España Seguridad (ES)"),
-        ("https://news.google.com/rss/search?q=(detenido+OR+arrestado)+(espia+ruso+OR+espia+chino+OR+sabotaje)&hl=es&gl=ES&ceid=ES:es", "Detenciones (ES)"),
-        ("https://theobjective.com/feed/", "The Objective (ES)"),
+
+        # Guerra y frente en ruso y ucraniano
         ("https://news.google.com/rss/search?q=(\"Institute+for+the+Study+of+War\"+OR+\"ISW\")+Russian+offensive&hl=en-US&gl=US&ceid=US:en", "ISW War Studies (EN)"),
         ("https://kyivindependent.com/feed/", "The Kyiv Independent (EN)"),
         ("https://www.pravda.com.ua/rss/", "Ukrainska Pravda (UA)"),
         ("https://meduza.io/rss/all", "Meduza (RU/EN)"),
         ("https://news.google.com/rss/search?q=Россия+(диверсия+OR+шпионаж+OR+СБУ+OR+ГУР)&hl=ru&gl=RU&ceid=RU:ru", "Rusia Frente (RU)"),
         ("https://news.google.com/rss/search?q=Україна+(диверсія+OR+агент+OR+ГУР+OR+СБУ)&hl=uk&gl=UA&ceid=UA:uk", "Ucrania Frente (UA)"),
+
+        # Polonia / ABW / Países Bálticos
         ("https://news.google.com/rss/search?q=(Polska+OR+Poland)+(sabotaż+OR+szpiegostwo+OR+dywersja+OR+ABW+OR+Rosja)&hl=pl&gl=PL&ceid=PL:pl", "Polonia ABW (PL)"),
+
+        # Sanciones y FININT Cripto
         ("https://news.google.com/rss/search?q=(OFAC+OR+\"OpenSanctions\"+OR+\"KSE+Institute\")+(Russia+OR+sanctions)&hl=en-US&gl=US&ceid=US:en", "OFAC Sanciones (EN)"),
         ("https://news.google.com/rss/search?q=(\"shadow+fleet\"+OR+\"dark+fleet\"+OR+\"sanctions+evasion\")+Russia&hl=en-US&gl=US&ceid=US:en", "Flota Fantasma (EN)"),
         ("https://news.google.com/rss/search?q=(crypto+OR+bitcoin+OR+USDT)+(Russia+OR+sanctions+OR+Garantex)&hl=en-US&gl=US&ceid=US:en", "FININT Cripto (EN)"),
+
+        # China y Asia-Pacífico
         ("https://news.google.com/rss/search?q=(China+OR+Beijing)+(espionage+OR+sabotage+OR+cyberattack+OR+MSS)&hl=en-US&gl=US&ceid=US:en", "China Injerencia (EN)"),
         ("https://news.google.com/rss/search?q=(中国+OR+北京)+(间谍+OR+网络攻击+OR+国安部)&hl=zh-CN&gl=CN&ceid=CN:zh-Hans", "China Intel (ZH)"),
+
+        # Árabe y Medio Oriente
         ("https://news.google.com/rss/search?q=(روسيا+OR+أوكرانيا+OR+الصين)+(تجسس+OR+طائرات+مسيرة)&hl=ar&gl=EG&ceid=EG:ar", "Intel Árabe (AR)")
     ]
 
@@ -547,7 +584,28 @@ def cargar_todas_las_fuentes():
     return unicos
 
 # ==========================================
-# 9. CABECERA TÁCTICA ORIGINAL Y CONTROL
+# 9. BARRA DE TRADUCCIÓN FLOTANTE (ESTILO BUSCADOR GOOGLE)
+# ==========================================
+st.markdown("""
+<div class="gad-translate-bar">
+    <span style="font-size: 11.5px; color: #38bdf8; font-family: sans-serif; font-weight: 800;">🌐 TRADUCCIÓN:</span>
+    <div id="google_translate_element"></div>
+</div>
+<script type="text/javascript">
+function googleTranslateElementInit() {
+  new google.translate.TranslateElement({
+      pageLanguage: 'auto',
+      includedLanguages: 'es,en,ru,uk,pl,zh-CN,ar',
+      layout: google.translate.TranslateElement.InlineLayout.SIMPLE,
+      autoDisplay: false
+  }, 'google_translate_element');
+}
+</script>
+<script type="text/javascript" src="//translate.google.com/translate.a/element.js?cb=googleTranslateElementInit"></script>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# 10. CABECERA TÁCTICA COMPLETA (ANCHO 100%)
 # ==========================================
 logo_svg = """<svg width="65" height="65" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
     <circle cx="50" cy="50" r="47" fill="#1e293b" stroke="#334155" stroke-width="2" />
@@ -556,32 +614,15 @@ logo_svg = """<svg width="65" height="65" viewBox="0 0 100 100" fill="none" xmln
     <polygon points="53,24 37,48 48,48 43,72 61,44 51,44" fill="#ef4444" />
 </svg>"""
 
-col_head1, col_head2 = st.columns([0.75, 0.25])
-with col_head1:
-    st.markdown(f"""
-    <div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); border-left: 8px solid #dc2626; border-radius: 10px; padding: 14px 22px; margin-bottom: 14px; display: flex; align-items: center; gap: 20px;">
-        <div>{logo_svg}</div>
-        <div>
-            <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 900; letter-spacing: 0.5px;">BUSCADOR DE AMENAZAS HÍBRIDAS</h1>
-            <p style="color: #94a3b8; font-size: 13.5px; margin: 4px 0 0 0;">SISTEMA DE VIGILANCIA DE FUENTES ABIERTAS</p>
-        </div>
+st.markdown(f"""
+<div style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); border-left: 8px solid #dc2626; border-radius: 10px; padding: 16px 22px; margin-bottom: 14px; display: flex; align-items: center; gap: 20px; width: 100%;">
+    <div>{logo_svg}</div>
+    <div>
+        <h1 style="color: #ffffff; margin: 0; font-size: 24px; font-weight: 900; letter-spacing: 0.5px;">BUSCADOR DE AMENAZAS HÍBRIDAS</h1>
+        <p style="color: #94a3b8; font-size: 13.5px; margin: 4px 0 0 0;">SISTEMA DE VIGILANCIA DE FUENTES ABIERTAS</p>
     </div>
-    """, unsafe_allow_html=True)
-
-with col_head2:
-    # Widget web que actúa como el "botón derecho -> traducir" en el navegador
-    components.html("""
-    <div style="text-align: right; padding-top: 10px;">
-        <span style="font-size: 12px; color: #cbd5e1; font-family: sans-serif; font-weight: bold;">🌐 Traducir vista: </span>
-        <div id="google_translate_element" style="display: inline-block;"></div>
-    </div>
-    <script type="text/javascript">
-    function googleTranslateElementInit() {
-      new google.translate.TranslateElement({pageLanguage: 'auto', includedLanguages: 'es', layout: google.translate.TranslateElement.InlineLayout.SIMPLE}, 'google_translate_element');
-    }
-    </script>
-    <script type="text/javascript" src="//translate.google.com/translate.a/element.js?cb=googleTranslateElementInit"></script>
-    """, height=50)
+</div>
+""", unsafe_allow_html=True)
 
 panel_estado = st.empty()
 
@@ -599,7 +640,7 @@ if "alertas_base" not in st.session_state:
     panel_estado.empty()
 
 # ==========================================
-# 10. PANEL DE FILTROS Y CONTROLES
+# 11. PANEL DE FILTROS Y CONTROLES
 # ==========================================
 with st.container():
     c_flt1, c_flt2, c_flt3 = st.columns([1.8, 1.2, 1.2])
@@ -686,7 +727,7 @@ with col_s2:
 st.write("")
 
 # ==========================================
-# 11. RENDERIZADO CON BADGES (24H/48H/72H)
+# 12. RENDERIZADO VISUAL COMPLETO (CON BADGES)
 # ==========================================
 def renderizar_tarjetas(lista_items):
     if not lista_items:
